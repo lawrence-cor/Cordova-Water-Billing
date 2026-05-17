@@ -456,6 +456,14 @@ input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
 }
 .start-locked-edit:active { background: rgba(52,211,153,0.1); }
 
+/* ── Manual entry: discard button ── */
+.btn-discard {
+  display: block; width: 100%; text-align: center;
+  color: var(--danger) !important; margin-bottom: 8px;
+  opacity: 0.75; transition: opacity .15s;
+}
+.btn-discard:active { opacity: 1; }
+
 /* ══════════════════════════════════════════════
    LOADING OVERLAY
    ══════════════════════════════════════════════ */

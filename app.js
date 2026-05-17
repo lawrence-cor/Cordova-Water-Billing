@@ -13,8 +13,8 @@
    ══════════════════════════════════════════════════════ */
 
 // ── Supabase config ───────────────────────────────────
-const SUPABASE_URL  = 'https://eztutdgqsqkoivshflgv.supabase.co';
-const SUPABASE_ANON = 'sb_publishable_PRo6bOt_InAW4eaoBokiLw_CrXIwaHE';
+const SUPABASE_URL  = 'https://YOUR_PROJECT_ID.supabase.co';
+const SUPABASE_ANON = 'YOUR_ANON_PUBLIC_KEY';
 
 // ── Family password gate ──────────────────────────────
 const FAMILY_NAME = 'Cordova';
@@ -177,6 +177,7 @@ async function showApp() {
   renderNotifBar();
   renderHome();
   refreshTxSelect();
+  restoreManualEntry();   // rebuild manual entry step from localStorage if pending
   updateNavDot();
   renderTimer();
   showLoading(false);
@@ -276,7 +277,7 @@ function showView(id) {
   const nav = document.getElementById(NAV_MAP[id]);
   if (nav) nav.classList.add('active');
   if (id === 'view-home')       renderHome();
-  if (id === 'view-newtx')      resetNewTx();
+  if (id === 'view-newtx')      restoreManualEntry();
   if (id === 'view-recipients') renderRecipients();
   if (id === 'view-history')    renderHistory();
   if (id === 'view-timer')      renderTimer();
@@ -437,13 +438,41 @@ function updateNavDot() {
 
 // ─────────────────────────────────────────────────────
 //  MANUAL ENTRY
+//  bt_ms = JSON { sh, sm, sp, rid } — persists across
+//          refreshes/exits until end time is saved or
+//          user explicitly discards
 // ─────────────────────────────────────────────────────
-// Saved start time for the two-step flow
-let manualStart = null;  // { sh, sm, sp } or null
+const MS_KEY = 'bt_ms';
+
+function msLoad()        { try { return JSON.parse(localStorage.getItem(MS_KEY)); } catch { return null; } }
+function msSave(o)       { localStorage.setItem(MS_KEY, JSON.stringify(o)); }
+function msClear()       { localStorage.removeItem(MS_KEY); }
 
 function clampH(el) { let v = parseInt(el.value) || 0; if (v > 12) el.value = 12; if (v < 0) el.value = ''; }
 function clampM(el) { let v = parseInt(el.value) || 0; if (v > 59) el.value = 59; if (v < 0) el.value = ''; }
 function togglePeriod(id) { const el = document.getElementById(id); el.textContent = el.textContent === 'AM' ? 'PM' : 'AM'; }
+
+// Called on showView('view-newtx') and on app boot — restores saved state
+function restoreManualEntry() {
+  const saved = msLoad();
+  if (saved) {
+    // Rebuild step 1 fields from saved state
+    document.getElementById('sh').value            = saved.sh;
+    document.getElementById('sm').value            = fmt2(saved.sm);
+    document.getElementById('sp').textContent      = saved.sp;
+    // Restore recipient selection after refreshTxSelect populates the list
+    refreshTxSelect();
+    document.getElementById('tx-recipient').value  = saved.rid || '';
+    // Show the locked banner and go to step 2
+    document.getElementById('start-locked-time').textContent = fmtTime(saved.sh, saved.sm, saved.sp);
+    document.getElementById('step-start').style.display = 'none';
+    document.getElementById('step-end').style.display   = 'block';
+    document.getElementById('result-box').style.display = 'none';
+  } else {
+    // Nothing saved — clean step 1
+    _clearManualUI();
+  }
+}
 
 function setStartTime() {
   const rid = document.getElementById('tx-recipient').value;
@@ -453,7 +482,8 @@ function setStartTime() {
   const sp = document.getElementById('sp').textContent;
   if (!sh) { alert('Enter a valid start hour!'); return; }
 
-  manualStart = { sh, sm, sp };
+  // Persist to localStorage so refresh/exit won't lose it
+  msSave({ sh, sm, sp, rid });
 
   // Show locked banner
   document.getElementById('start-locked-time').textContent = fmtTime(sh, sm, sp);
@@ -471,12 +501,29 @@ function setStartTime() {
 }
 
 function editStartTime() {
-  // Go back to step 1, keeping start field values intact
-  manualStart = null;
+  // Keep localStorage — user is just editing, not discarding
+  msClear();
   document.getElementById('step-end').style.display   = 'none';
   document.getElementById('step-start').style.display = 'block';
   document.getElementById('result-box').style.display = 'none';
   window.scrollTo(0, 0);
+}
+
+function discardManualEntry() {
+  msClear();
+  _clearManualUI();
+}
+
+// Internal — resets all fields and goes back to step 1, no localStorage touch
+function _clearManualUI() {
+  ['sh', 'sm', 'eh', 'em'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('sp').textContent = 'AM';
+  document.getElementById('ep').textContent = 'PM';
+  document.getElementById('result-box').style.display = 'none';
+  document.getElementById('add-inline').style.display = 'none';
+  document.getElementById('step-start').style.display = 'block';
+  document.getElementById('step-end').style.display   = 'none';
+  refreshTxSelect();
 }
 
 function toggleAddInline() {
@@ -496,6 +543,9 @@ async function saveInlineRecipient() {
   document.getElementById('add-inline').style.display = 'none';
   refreshTxSelect();
   document.getElementById('tx-recipient').value = r.id;
+  // Update persisted rid if we're already in step 2
+  const saved = msLoad();
+  if (saved) { saved.rid = r.id; msSave(saved); }
 }
 
 function refreshTxSelect() {
@@ -507,10 +557,11 @@ function refreshTxSelect() {
 }
 
 function calculate() {
-  if (!manualStart) { alert('Please set a start time first!'); return; }
-  const rid = document.getElementById('tx-recipient').value;
+  const saved = msLoad();
+  if (!saved) { alert('Please set a start time first!'); return; }
+  const rid = document.getElementById('tx-recipient').value || saved.rid;
   if (!rid) { alert('Choose a recipient first!'); return; }
-  const { sh, sm, sp } = manualStart;
+  const { sh, sm, sp } = saved;
   const eh = parseInt(document.getElementById('eh').value) || 0;
   const em = parseInt(document.getElementById('em').value) || 0;
   const ep = document.getElementById('ep').textContent;
@@ -533,6 +584,8 @@ async function saveTxManual(rid, sh, sm, sp, eh, em, ep, cost, mins) {
   const tx = { id: genId(), recipientId: rid, recipientName: rec.name, sh, sm, sp, eh, em, ep, mins, cost, paid: false, date: new Date().toISOString() };
   transactions.unshift(tx);
   await dbInsertTransaction(tx);
+  // Clear persistence — transaction is now saved
+  msClear();
   document.getElementById('result-box').innerHTML = `
     <div class="result-card success">
       <div style="font-size:34px;margin-bottom:6px">&#10003;</div>
@@ -542,17 +595,10 @@ async function saveTxManual(rid, sh, sm, sp, eh, em, ep, cost, mins) {
   renderHome();
 }
 
+// Called after a successful save or "+ Add Another" — full clean reset
 function resetNewTx() {
-  manualStart = null;
-  ['sh', 'sm', 'eh', 'em'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('sp').textContent = 'AM';
-  document.getElementById('ep').textContent = 'PM';
-  document.getElementById('result-box').style.display = 'none';
-  document.getElementById('add-inline').style.display = 'none';
-  // Always reset to step 1
-  document.getElementById('step-start').style.display = 'block';
-  document.getElementById('step-end').style.display   = 'none';
-  refreshTxSelect();
+  msClear();
+  _clearManualUI();
 }
 
 // ─────────────────────────────────────────────────────
