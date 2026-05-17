@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <title>Billing Tracker · Cordova</title>
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="style.css"/>
+
+  <!-- Supabase SDK (needed before app.js) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<!-- ── Loading overlay ─────────────────────────────── -->
+<div id="loading-overlay" style="display:none">
+  <div class="loading-spinner"></div>
+  <div class="loading-text">Loading…</div>
+</div>
+
+<!-- ── Toast container ─────────────────────────────── -->
+<div id="toast-container"></div>
+
+<div class="glow"></div>
+
+<!-- ══════════════════════════════════════════════════
+     LOGIN SCREEN
+     ══════════════════════════════════════════════════ -->
+<div id="screen-login">
+  <div class="login-badge">💧</div>
+  <div class="login-title">Cordova Billing</div>
+  <div class="login-sub">Family Water Tracker</div>
+
+  <div class="login-card">
+    <div class="login-field">
+      <label class="login-label" for="login-name">Family Name</label>
+      <input class="login-input" type="text" id="login-name" placeholder="Cordova" autocomplete="off"/>
+    </div>
+    <div class="login-field">
+      <label class="login-label" for="login-pass">Password</label>
+      <input class="login-input" type="password" id="login-pass" placeholder="••••" autocomplete="current-password"/>
+    </div>
+    <div class="login-err" id="login-err"></div>
+    <button class="login-btn" onclick="doLogin()">Enter</button>
+  </div>
+
+  <div class="login-footer">Family access only</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     APP SHELL  (hidden until logged in)
+     ══════════════════════════════════════════════════ -->
+<div id="app-shell" style="display:none">
+
+  <!-- ── HOME ──────────────────────────────────────── -->
+  <div id="view-home" class="view active">
+    <!-- User bar -->
+    <div class="user-bar">
+      <span class="user-bar-name">Cordova Family</span>
+      <button class="user-bar-logout" onclick="doLogout()">Sign Out</button>
+    </div>
+
+    <!-- Notification permission prompt (hidden once granted) -->
+    <div class="notif-bar" id="notif-bar" style="display:none">
+      <div class="notif-bar-text">Enable notifications to get alerts when sessions start &amp; stop.</div>
+      <button class="notif-bar-btn" onclick="requestNotifPermission()">Enable</button>
+    </div>
+
+    <div class="hero">
+      <div class="hero-tag">Billing Tracker</div>
+      <div class="hero-title">Track Every<br><span>Peso.</span></div>
+    </div>
+
+    <div class="card-grid">
+      <div class="home-card" onclick="showView('view-timer')">
+        <div class="home-card-icon">▶︎</div>
+        <div class="home-card-label">Auto Timer</div>
+        <div class="home-card-sub" id="home-timer-sub">Tap to start</div>
+      </div>
+      <div class="home-card" onclick="showView('view-newtx')">
+        <div class="home-card-icon">⏱</div>
+        <div class="home-card-label">Manual Entry</div>
+        <div class="home-card-sub">Enter times manually</div>
+      </div>
+      <div class="home-card" onclick="showView('view-recipients')">
+        <div class="home-card-icon">👤</div>
+        <div class="home-card-label">Recipients</div>
+        <div class="home-card-sub" id="home-rec-count">0 saved</div>
+      </div>
+      <div class="home-card" onclick="showView('view-history')">
+        <div class="home-card-icon">📋</div>
+        <div class="home-card-label">All Transactions</div>
+        <div class="home-card-sub" id="home-tx-count">0 records</div>
+      </div>
+    </div>
+
+    <div class="section-card">
+      <div class="section-label">Unpaid Summary</div>
+      <div id="unpaid-summary"></div>
+    </div>
+  </div>
+
+  <!-- ── AUTO TIMER ────────────────────────────────── -->
+  <div id="view-timer" class="view">
+    <div class="back-bar">
+      <button class="back-btn" onclick="showView('view-home')">‹</button>
+      <span class="back-title">Auto Timer</span>
+    </div>
+
+    <!-- Idle -->
+    <div id="tp-idle">
+      <div class="section-card">
+        <div class="section-label">Who is this session for?</div>
+        <select id="timer-recipient" style="margin-bottom:10px">
+          <option value="">— Select recipient —</option>
+        </select>
+        <button class="btn-ghost" onclick="toggleTimerAdd()">+ Add New Recipient</button>
+        <div id="timer-add-row" style="display:none;margin-top:12px">
+          <div class="row">
+            <input type="text" id="timer-new-name" placeholder="Recipient name" style="flex:1"
+                   onkeydown="if(event.key==='Enter')saveTimerNewRec()"/>
+            <button class="btn-small" onclick="saveTimerNewRec()">Save</button>
+          </div>
+        </div>
+      </div>
+      <button class="btn-start" onclick="timerStart()">▶&nbsp; START SESSION</button>
+    </div>
+
+    <!-- Running -->
+    <div id="tp-running" style="display:none">
+      <div class="timer-running-card">
+        <div class="tr-rec-name" id="tr-name">—</div>
+        <div class="tr-started" id="tr-started">Started at —</div>
+        <div class="tr-clock" id="tr-clock">00:00:00</div>
+        <div class="tr-live-badge"><span class="dot"></span>LIVE</div>
+      </div>
+      <button class="btn-stop" onclick="timerStop()">⏹&nbsp; STOP &amp; SAVE</button>
+      <p class="safe-note">Safe to close or refresh this page.<br>Your session keeps running in the background.</p>
+    </div>
+
+    <!-- Preview / save -->
+    <div id="tp-preview" style="display:none">
+      <div class="timer-preview-card" id="tp-preview-inner"></div>
+      <button class="btn-primary" onclick="timerSave()">Save Transaction</button>
+      <button class="btn-ghost" style="width:100%;text-align:center;display:block;margin-bottom:8px"
+              onclick="timerDiscard()">Discard Session</button>
+    </div>
+  </div>
+
+  <!-- ── MANUAL ENTRY ──────────────────────────────── -->
+  <div id="view-newtx" class="view">
+    <div class="back-bar">
+      <button class="back-btn" onclick="showView('view-home')">‹</button>
+      <span class="back-title">New Transaction</span>
+    </div>
+    <div class="section-card">
+      <div class="section-label">Recipient</div>
+      <select id="tx-recipient" style="margin-bottom:10px">
+        <option value="">— Select recipient —</option>
+      </select>
+      <button class="btn-ghost" onclick="toggleAddInline()">+ Add New Recipient</button>
+      <div id="add-inline" style="display:none;margin-top:12px">
+        <div class="row">
+          <input type="text" id="inline-name" placeholder="Recipient name" style="flex:1"
+                 onkeydown="if(event.key==='Enter')saveInlineRecipient()"/>
+          <button class="btn-small" onclick="saveInlineRecipient()">Save</button>
+        </div>
+      </div>
+    </div>
+    <div class="section-card">
+      <div class="section-label" style="margin-bottom:16px">Start Time</div>
+      <div class="time-row">
+        <input class="time-input" type="number" id="sh" inputmode="numeric"
+               pattern="[0-9]*" min="1" max="12" placeholder="HH" oninput="clampH(this)"/>
+        <span class="time-sep">:</span>
+        <input class="time-input" type="number" id="sm" inputmode="numeric"
+               pattern="[0-9]*" min="0" max="59" placeholder="MM" oninput="clampM(this)"/>
+        <button class="period-btn" id="sp" onclick="togglePeriod('sp')">AM</button>
+      </div>
+      <div style="height:20px"></div>
+      <div class="section-label" style="margin-bottom:16px">End Time</div>
+      <div class="time-row">
+        <input class="time-input" type="number" id="eh" inputmode="numeric"
+               pattern="[0-9]*" min="1" max="12" placeholder="HH" oninput="clampH(this)"/>
+        <span class="time-sep">:</span>
+        <input class="time-input" type="number" id="em" inputmode="numeric"
+               pattern="[0-9]*" min="0" max="59" placeholder="MM" oninput="clampM(this)"/>
+        <button class="period-btn" id="ep" onclick="togglePeriod('ep')">PM</button>
+      </div>
+    </div>
+    <button class="btn-primary" onclick="calculate()">Calculate Cost</button>
+    <div id="result-box" style="display:none"></div>
+  </div>
+
+  <!-- ── RECIPIENTS ────────────────────────────────── -->
+  <div id="view-recipients" class="view">
+    <div class="back-bar">
+      <button class="back-btn" onclick="showView('view-home')">‹</button>
+      <span class="back-title">Recipients</span>
+    </div>
+    <div class="section-card">
+      <div class="row">
+        <input type="text" id="new-rec-name" placeholder="New recipient name" style="flex:1"
+               onkeydown="if(event.key==='Enter')addRecipient()"/>
+        <button class="btn-small" onclick="addRecipient()">Add</button>
+      </div>
+    </div>
+    <div id="recipients-list"></div>
+  </div>
+
+  <!-- ── HISTORY ───────────────────────────────────── -->
+  <div id="view-history" class="view">
+    <div class="back-bar">
+      <button class="back-btn" onclick="showView('view-home')">‹</button>
+      <span class="back-title">All Transactions</span>
+    </div>
+    <div id="history-list"></div>
+  </div>
+
+  <!-- ── DETAIL ────────────────────────────────────── -->
+  <div id="view-detail" class="view">
+    <div class="back-bar">
+      <button class="back-btn" onclick="showView('view-recipients')">‹</button>
+      <span class="back-title" id="detail-title">—</span>
+    </div>
+    <div class="section-card" id="detail-stats"></div>
+    <div id="detail-list"></div>
+  </div>
+
+  <!-- ── BOTTOM NAV ────────────────────────────────── -->
+  <nav class="bottom-nav">
+    <button class="nav-item active" id="nav-home" onclick="showView('view-home')">
+      <span class="nav-item-icon">🏠</span>
+      <span class="nav-item-label">Home</span>
+    </button>
+    <button class="nav-item" id="nav-timer" onclick="showView('view-timer')">
+      <span class="live-dot" id="nav-live-dot"></span>
+      <span class="nav-item-icon">▶︎</span>
+      <span class="nav-item-label">Timer</span>
+    </button>
+    <button class="nav-item" id="nav-newtx" onclick="showView('view-newtx')">
+      <span class="nav-item-icon">✏️</span>
+      <span class="nav-item-label">Manual</span>
+    </button>
+    <button class="nav-item" id="nav-recipients" onclick="showView('view-recipients')">
+      <span class="nav-item-icon">👥</span>
+      <span class="nav-item-label">People</span>
+    </button>
+    <button class="nav-item" id="nav-history" onclick="showView('view-history')">
+      <span class="nav-item-icon">📋</span>
+      <span class="nav-item-label">History</span>
+    </button>
+  </nav>
+
+</div><!-- /#app-shell -->
+
+<!-- App logic -->
+<script src="app.js"></script>
+
+</body>
+</html>
