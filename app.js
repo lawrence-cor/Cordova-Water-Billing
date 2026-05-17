@@ -13,8 +13,8 @@
    ══════════════════════════════════════════════════════ */
 
 // ── Supabase config ───────────────────────────────────
-const SUPABASE_URL  = 'https://eztutdgqsqkoivshflgv.supabase.co';
-const SUPABASE_ANON = 'sb_publishable_PRo6bOt_InAW4eaoBokiLw_CrXIwaHE';
+const SUPABASE_URL  = 'https://YOUR_PROJECT_ID.supabase.co';
+const SUPABASE_ANON = 'YOUR_ANON_PUBLIC_KEY';
 
 // ── Family password gate ──────────────────────────────
 const FAMILY_NAME = 'Cordova';
@@ -438,9 +438,46 @@ function updateNavDot() {
 // ─────────────────────────────────────────────────────
 //  MANUAL ENTRY
 // ─────────────────────────────────────────────────────
+// Saved start time for the two-step flow
+let manualStart = null;  // { sh, sm, sp } or null
+
 function clampH(el) { let v = parseInt(el.value) || 0; if (v > 12) el.value = 12; if (v < 0) el.value = ''; }
 function clampM(el) { let v = parseInt(el.value) || 0; if (v > 59) el.value = 59; if (v < 0) el.value = ''; }
 function togglePeriod(id) { const el = document.getElementById(id); el.textContent = el.textContent === 'AM' ? 'PM' : 'AM'; }
+
+function setStartTime() {
+  const rid = document.getElementById('tx-recipient').value;
+  if (!rid) { alert('Choose a recipient first!'); return; }
+  const sh = parseInt(document.getElementById('sh').value) || 0;
+  const sm = parseInt(document.getElementById('sm').value) || 0;
+  const sp = document.getElementById('sp').textContent;
+  if (!sh) { alert('Enter a valid start hour!'); return; }
+
+  manualStart = { sh, sm, sp };
+
+  // Show locked banner
+  document.getElementById('start-locked-time').textContent = fmtTime(sh, sm, sp);
+
+  // Switch steps
+  document.getElementById('step-start').style.display = 'none';
+  document.getElementById('step-end').style.display   = 'block';
+  document.getElementById('result-box').style.display = 'none';
+
+  // Clear end time fields
+  ['eh', 'em'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('ep').textContent = 'PM';
+
+  window.scrollTo(0, 0);
+}
+
+function editStartTime() {
+  // Go back to step 1, keeping start field values intact
+  manualStart = null;
+  document.getElementById('step-end').style.display   = 'none';
+  document.getElementById('step-start').style.display = 'block';
+  document.getElementById('result-box').style.display = 'none';
+  window.scrollTo(0, 0);
+}
 
 function toggleAddInline() {
   const el = document.getElementById('add-inline');
@@ -470,15 +507,14 @@ function refreshTxSelect() {
 }
 
 function calculate() {
+  if (!manualStart) { alert('Please set a start time first!'); return; }
   const rid = document.getElementById('tx-recipient').value;
   if (!rid) { alert('Choose a recipient first!'); return; }
-  const sh = parseInt(document.getElementById('sh').value) || 0;
-  const sm = parseInt(document.getElementById('sm').value) || 0;
-  const sp = document.getElementById('sp').textContent;
+  const { sh, sm, sp } = manualStart;
   const eh = parseInt(document.getElementById('eh').value) || 0;
   const em = parseInt(document.getElementById('em').value) || 0;
   const ep = document.getElementById('ep').textContent;
-  if (!sh || !eh) { alert('Enter valid times!'); return; }
+  if (!eh) { alert('Enter a valid end hour!'); return; }
   const res = calcCostHM(sh, sm, sp, eh, em, ep);
   const box = document.getElementById('result-box');
   box.style.display = 'block';
@@ -507,11 +543,15 @@ async function saveTxManual(rid, sh, sm, sp, eh, em, ep, cost, mins) {
 }
 
 function resetNewTx() {
+  manualStart = null;
   ['sh', 'sm', 'eh', 'em'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('sp').textContent = 'AM';
   document.getElementById('ep').textContent = 'PM';
   document.getElementById('result-box').style.display = 'none';
   document.getElementById('add-inline').style.display = 'none';
+  // Always reset to step 1
+  document.getElementById('step-start').style.display = 'block';
+  document.getElementById('step-end').style.display   = 'none';
   refreshTxSelect();
 }
 

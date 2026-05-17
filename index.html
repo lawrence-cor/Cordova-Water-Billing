@@ -154,43 +154,60 @@
       <button class="back-btn" onclick="showView('view-home')">‹</button>
       <span class="back-title">New Transaction</span>
     </div>
-    <div class="section-card">
-      <div class="section-label">Recipient</div>
-      <select id="tx-recipient" style="margin-bottom:10px">
-        <option value="">— Select recipient —</option>
-      </select>
-      <button class="btn-ghost" onclick="toggleAddInline()">+ Add New Recipient</button>
-      <div id="add-inline" style="display:none;margin-top:12px">
-        <div class="row">
-          <input type="text" id="inline-name" placeholder="Recipient name" style="flex:1"
-                 onkeydown="if(event.key==='Enter')saveInlineRecipient()"/>
-          <button class="btn-small" onclick="saveInlineRecipient()">Save</button>
+
+    <!-- Step 1: Recipient + Start Time -->
+    <div id="step-start">
+      <div class="section-card">
+        <div class="section-label">Recipient</div>
+        <select id="tx-recipient" style="margin-bottom:10px">
+          <option value="">— Select recipient —</option>
+        </select>
+        <button class="btn-ghost" onclick="toggleAddInline()">+ Add New Recipient</button>
+        <div id="add-inline" style="display:none;margin-top:12px">
+          <div class="row">
+            <input type="text" id="inline-name" placeholder="Recipient name" style="flex:1"
+                   onkeydown="if(event.key==='Enter')saveInlineRecipient()"/>
+            <button class="btn-small" onclick="saveInlineRecipient()">Save</button>
+          </div>
         </div>
       </div>
-    </div>
-    <div class="section-card">
-      <div class="section-label" style="margin-bottom:16px">Start Time</div>
-      <div class="time-row">
-        <input class="time-input" type="number" id="sh" inputmode="numeric"
-               pattern="[0-9]*" min="1" max="12" placeholder="HH" oninput="clampH(this)"/>
-        <span class="time-sep">:</span>
-        <input class="time-input" type="number" id="sm" inputmode="numeric"
-               pattern="[0-9]*" min="0" max="59" placeholder="MM" oninput="clampM(this)"/>
-        <button class="period-btn" id="sp" onclick="togglePeriod('sp')">AM</button>
+      <div class="section-card">
+        <div class="section-label" style="margin-bottom:16px">Start Time</div>
+        <div class="time-row">
+          <input class="time-input" type="number" id="sh" inputmode="numeric"
+                 pattern="[0-9]*" min="1" max="12" placeholder="HH" oninput="clampH(this)"/>
+          <span class="time-sep">:</span>
+          <input class="time-input" type="number" id="sm" inputmode="numeric"
+                 pattern="[0-9]*" min="0" max="59" placeholder="MM" oninput="clampM(this)"/>
+          <button class="period-btn" id="sp" onclick="togglePeriod('sp')">AM</button>
+        </div>
       </div>
-      <div style="height:20px"></div>
-      <div class="section-label" style="margin-bottom:16px">End Time</div>
-      <div class="time-row">
-        <input class="time-input" type="number" id="eh" inputmode="numeric"
-               pattern="[0-9]*" min="1" max="12" placeholder="HH" oninput="clampH(this)"/>
-        <span class="time-sep">:</span>
-        <input class="time-input" type="number" id="em" inputmode="numeric"
-               pattern="[0-9]*" min="0" max="59" placeholder="MM" oninput="clampM(this)"/>
-        <button class="period-btn" id="ep" onclick="togglePeriod('ep')">PM</button>
-      </div>
+      <button class="btn-primary" onclick="setStartTime()">Set Start Time →</button>
     </div>
-    <button class="btn-primary" onclick="calculate()">Calculate Cost</button>
-    <div id="result-box" style="display:none"></div>
+
+    <!-- Step 2: Start time locked banner + End Time (hidden until step 1 done) -->
+    <div id="step-end" style="display:none">
+      <!-- Locked start time display -->
+      <div class="start-locked-bar" id="start-locked-bar">
+        <div class="start-locked-label">START TIME</div>
+        <div class="start-locked-time" id="start-locked-time">—</div>
+        <button class="start-locked-edit" onclick="editStartTime()">Edit</button>
+      </div>
+
+      <div class="section-card">
+        <div class="section-label" style="margin-bottom:16px">End Time</div>
+        <div class="time-row">
+          <input class="time-input" type="number" id="eh" inputmode="numeric"
+                 pattern="[0-9]*" min="1" max="12" placeholder="HH" oninput="clampH(this)"/>
+          <span class="time-sep">:</span>
+          <input class="time-input" type="number" id="em" inputmode="numeric"
+                 pattern="[0-9]*" min="0" max="59" placeholder="MM" oninput="clampM(this)"/>
+          <button class="period-btn" id="ep" onclick="togglePeriod('ep')">PM</button>
+        </div>
+      </div>
+      <button class="btn-primary" onclick="calculate()">Calculate &amp; Save</button>
+      <div id="result-box" style="display:none"></div>
+    </div>
   </div>
 
   <!-- ── RECIPIENTS ────────────────────────────────── -->
