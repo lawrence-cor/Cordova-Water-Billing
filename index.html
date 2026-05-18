@@ -136,13 +136,14 @@
         <div class="tr-live-badge"><span class="dot"></span>LIVE</div>
       </div>
       <button class="btn-stop" onclick="timerStop()">⏹&nbsp; STOP &amp; SAVE</button>
-      <p class="safe-note">Safe to close or refresh this page.<br>Your session keeps running in the background.</p>
+      <p class="safe-note">Any family member can stop this session<br>from their own device.</p>
     </div>
 
     <!-- Preview / save -->
     <div id="tp-preview" style="display:none">
       <div class="timer-preview-card" id="tp-preview-inner"></div>
       <button class="btn-primary" onclick="timerSave()">Save Transaction</button>
+      <button class="btn-save-img" onclick="saveAsImage('tp-preview-inner')">📸 Save as Image</button>
       <button class="btn-ghost" style="width:100%;text-align:center;display:block;margin-bottom:8px"
               onclick="timerDiscard()">Discard Session</button>
     </div>
@@ -185,9 +186,8 @@
       <button class="btn-primary" onclick="setStartTime()">Set Start Time →</button>
     </div>
 
-    <!-- Step 2: Start time locked banner + End Time (hidden until step 1 done) -->
+    <!-- Step 2: Start time locked banner + End Time -->
     <div id="step-end" style="display:none">
-      <!-- Locked start time display -->
       <div class="start-locked-bar" id="start-locked-bar">
         <div class="start-locked-label">START TIME</div>
         <div class="start-locked-time" id="start-locked-time">—</div>

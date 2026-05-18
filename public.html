@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <title>Cordova Water Bill</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=Sora:wght@400;600;700;800&display=swap" rel="stylesheet"/>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    /* ── Variables ── */
+    :root {
+      --bg:       #06080f;
+      --bg2:      #0b0f1a;
+      --card:     rgba(255,255,255,0.035);
+      --border:   rgba(255,255,255,0.07);
+      --accent:   #38bdf8;
+      --danger:   #f87171;
+      --success:  #34d399;
+      --warn:     #fbbf24;
+      --text:     #eef4ff;
+      --muted:    #4e6080;
+      --mono:     'DM Mono', monospace;
+      --serif:    'Instrument Serif', serif;
+      --sans:     'Sora', sans-serif;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      min-height: 100%; background: var(--bg); color: var(--text);
+      font-family: var(--sans); overflow-x: hidden;
+    }
+    body { max-width: 480px; margin: 0 auto; padding-bottom: 60px; }
+    ::-webkit-scrollbar { width: 0; }
+
+    /* ── Noise texture overlay ── */
+    body::before {
+      content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 1000;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+      opacity: .5;
+    }
+
+    /* ── Ambient glows ── */
+    .glow-top {
+      position: fixed; top: -120px; left: 50%; transform: translateX(-50%);
+      width: 340px; height: 340px; pointer-events: none; z-index: 0;
+      background: radial-gradient(circle, rgba(56,189,248,0.07) 0%, transparent 68%);
+    }
+    .glow-bot {
+      position: fixed; bottom: -80px; right: -60px;
+      width: 260px; height: 260px; pointer-events: none; z-index: 0;
+      background: radial-gradient(circle, rgba(251,191,36,0.06) 0%, transparent 70%);
+    }
+
+    /* ── Header ── */
+    header {
+      position: relative; z-index: 2;
+      padding: 48px 24px 28px;
+      border-bottom: 1px solid var(--border);
+    }
+    .header-eyebrow {
+      font-size: 10px; font-weight: 700; letter-spacing: 3.5px;
+      color: var(--accent); text-transform: uppercase; margin-bottom: 10px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .header-eyebrow::before {
+      content: ''; display: inline-block; width: 20px; height: 1.5px;
+      background: var(--accent);
+    }
+    .header-title {
+      font-family: var(--serif); font-size: 40px; font-style: italic;
+      line-height: 1.08; color: var(--text); margin-bottom: 6px;
+    }
+    .header-title span { color: var(--accent); font-style: normal; }
+    .header-sub {
+      color: var(--muted); font-size: 13px; font-weight: 600; margin-top: 10px;
+    }
+    .header-date {
+      font-family: var(--mono); font-size: 11px; color: var(--muted);
+      margin-top: 4px;
+    }
+
+    /* ── Loading ── */
+    #loading {
+      position: fixed; inset: 0; background: var(--bg); z-index: 9999;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+    }
+    .spin {
+      width: 36px; height: 36px; border: 2.5px solid var(--border);
+      border-top-color: var(--accent); border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin-label { font-size: 11px; font-weight: 700; letter-spacing: 2.5px; color: var(--muted); text-transform: uppercase; }
+
+    /* ── Error ── */
+    #error-box {
+      margin: 32px 20px; background: rgba(248,113,113,0.08);
+      border: 1px solid rgba(248,113,113,0.25); border-radius: 18px;
+      padding: 24px; text-align: center; display: none;
+    }
+    .error-icon { font-size: 36px; margin-bottom: 10px; }
+    .error-msg { color: var(--danger); font-weight: 700; font-size: 15px; }
+
+    /* ── Main ── */
+    main { position: relative; z-index: 2; padding: 24px 16px 0; }
+
+    /* ── Summary strip ── */
+    .summary-strip {
+      display: flex; gap: 10px; margin-bottom: 28px;
+    }
+    .strip-pill {
+      flex: 1; background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 14px 10px; text-align: center;
+    }
+    .strip-val {
+      font-family: var(--mono); font-size: 19px; font-weight: 500; color: var(--text);
+    }
+    .strip-val.red   { color: var(--danger); }
+    .strip-val.green { color: var(--success); }
+    .strip-label {
+      font-size: 9px; font-weight: 800; letter-spacing: 2px;
+      text-transform: uppercase; color: var(--muted); margin-top: 4px;
+    }
+
+    /* ── Section heading ── */
+    .sec-heading {
+      font-size: 9px; font-weight: 800; letter-spacing: 3px;
+      color: var(--muted); text-transform: uppercase;
+      margin-bottom: 12px; padding: 0 2px;
+    }
+
+    /* ── Recipient cards ── */
+    .rec-card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 20px; margin-bottom: 14px;
+      overflow: hidden;
+      animation: slideUp .35s ease both;
+    }
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(14px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .rec-card:nth-child(1) { animation-delay: .04s; }
+    .rec-card:nth-child(2) { animation-delay: .10s; }
+    .rec-card:nth-child(3) { animation-delay: .16s; }
+    .rec-card:nth-child(4) { animation-delay: .22s; }
+    .rec-card:nth-child(5) { animation-delay: .28s; }
+    .rec-card:nth-child(6) { animation-delay: .34s; }
+
+    .rec-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 18px 18px 14px; cursor: pointer;
+      transition: background .15s;
+      user-select: none;
+    }
+    .rec-header:active { background: rgba(255,255,255,0.03); }
+
+    .rec-avatar {
+      width: 38px; height: 38px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; font-weight: 900; flex-shrink: 0;
+      margin-right: 12px;
+    }
+    .rec-info { flex: 1; min-width: 0; }
+    .rec-name {
+      font-weight: 800; font-size: 16px; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .rec-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+    .rec-right { text-align: right; flex-shrink: 0; }
+    .rec-owe {
+      font-family: var(--mono); font-size: 20px; font-weight: 500;
+      line-height: 1;
+    }
+    .rec-owe.has-balance { color: var(--danger); }
+    .rec-owe.no-balance  { color: var(--success); font-size: 15px; }
+    .rec-owe-label {
+      font-size: 9px; font-weight: 800; letter-spacing: 1.5px;
+      text-transform: uppercase; color: var(--muted); margin-top: 2px;
+    }
+
+    .rec-chevron {
+      margin-left: 10px; color: var(--muted); font-size: 14px;
+      transition: transform .25s ease; flex-shrink: 0;
+    }
+    .rec-card.open .rec-chevron { transform: rotate(90deg); }
+
+    /* ── Transaction list (collapsible) ── */
+    .tx-list {
+      max-height: 0; overflow: hidden;
+      transition: max-height .35s cubic-bezier(.4,0,.2,1);
+    }
+    .rec-card.open .tx-list { max-height: 2000px; }
+
+    .tx-divider {
+      height: 1px; background: var(--border); margin: 0 18px;
+    }
+
+    .tx-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 13px 18px; gap: 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+    .tx-item:last-child { border-bottom: none; }
+
+    .tx-left { flex: 1; min-width: 0; }
+    .tx-date { font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+    .tx-times {
+      font-family: var(--mono); font-size: 12px; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .tx-duration { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+    .tx-right { text-align: right; flex-shrink: 0; }
+    .tx-status {
+      display: inline-block; font-size: 10px; font-weight: 800;
+      letter-spacing: 0.5px; padding: 4px 10px; border-radius: 20px;
+      border: 1.5px solid;
+    }
+    .tx-status.unpaid {
+      color: var(--danger);
+      border-color: rgba(248,113,113,0.3);
+      background: rgba(248,113,113,0.08);
+    }
+    .tx-status.paid {
+      color: var(--success);
+      border-color: rgba(52,211,153,0.3);
+      background: rgba(52,211,153,0.08);
+    }
+    .tx-mins {
+      font-family: var(--mono); font-size: 11px; color: var(--muted);
+      margin-top: 4px;
+    }
+
+    /* ── Empty ── */
+    .empty-tx {
+      padding: 20px 18px; color: var(--muted);
+      font-size: 13px; text-align: center;
+    }
+
+    /* ── No data ── */
+    .no-data {
+      text-align: center; padding: 64px 24px; color: var(--muted);
+    }
+    .no-data-icon { font-size: 44px; margin-bottom: 14px; }
+    .no-data-text { font-weight: 600; font-size: 15px; }
+
+    /* ── Footer ── */
+    footer {
+      position: relative; z-index: 2;
+      text-align: center; padding: 28px 24px;
+      color: var(--muted); font-size: 11px; font-weight: 600;
+      letter-spacing: 1px;
+    }
+    footer span { color: var(--accent); }
+
+    /* ── Refresh button ── */
+    .refresh-btn {
+      display: block; margin: 0 auto 20px;
+      background: rgba(56,189,248,0.08);
+      border: 1.5px solid rgba(56,189,248,0.2);
+      border-radius: 12px; color: var(--accent);
+      font-size: 12px; font-weight: 700;
+      padding: 8px 20px; cursor: pointer;
+      font-family: var(--sans); letter-spacing: 0.5px;
+      transition: background .15s;
+    }
+    .refresh-btn:active { background: rgba(56,189,248,0.16); }
+  </style>
+</head>
+<body>
+
+<div class="glow-top"></div>
+<div class="glow-bot"></div>
+
+<!-- Loading -->
+<div id="loading">
+  <div class="spin"></div>
+  <div class="spin-label">Loading bills…</div>
+</div>
+
+<!-- Error -->
+<div id="error-box">
+  <div class="error-icon">⚠️</div>
+  <div class="error-msg" id="error-msg">Could not load data.</div>
+</div>
+
+<!-- Header -->
+<header>
+  <div class="header-eyebrow">Cordova Family</div>
+  <div class="header-title">Water<br><span>Bills</span></div>
+  <div class="header-sub">Your sessions &amp; balance</div>
+  <div class="header-date" id="header-date"></div>
+</header>
+
+<!-- Main -->
+<main id="main" style="display:none">
+  <!-- Summary strip -->
+  <div class="summary-strip" id="summary-strip"></div>
+
+  <div class="sec-heading">Recipients</div>
+  <div id="rec-list"></div>
+
+  <button class="refresh-btn" onclick="loadAndRender()">↻ Refresh</button>
+</main>
+
+<footer>Cordova Billing · <span>Read-only view</span></footer>
+
+<script>
+  // ── Config (must match your app.js) ──────────────────
+  const SUPABASE_URL  = 'https://YOUR_PROJECT_ID.supabase.co';
+  const SUPABASE_ANON = 'YOUR_ANON_PUBLIC_KEY';
+
+  const { createClient } = supabase;
+  const db = createClient(SUPABASE_URL, SUPABASE_ANON, {
+    auth: { persistSession: false }
+  });
+
+  // ── Helpers ──────────────────────────────────────────
+  const fmt2    = n => String(n).padStart(2, '0');
+  const fmtTime = (h, m, p) => `${fmt2(h)}:${fmt2(m)} ${p}`;
+  const esc     = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const fmtDate = iso => new Date(iso).toLocaleDateString('en-PH', {
+    month: 'short', day: 'numeric', year: 'numeric'
+  });
+
+  // Avatar colors per person (cycles)
+  const AVATAR_COLORS = [
+    { bg: 'rgba(56,189,248,0.15)',  color: '#38bdf8' },
+    { bg: 'rgba(251,191,36,0.15)',  color: '#fbbf24' },
+    { bg: 'rgba(52,211,153,0.15)',  color: '#34d399' },
+    { bg: 'rgba(248,113,113,0.15)', color: '#f87171' },
+    { bg: 'rgba(167,139,250,0.15)', color: '#a78bfa' },
+    { bg: 'rgba(251,146,60,0.15)',  color: '#fb923c' },
+  ];
+
+  function initials(name) {
+    return name.trim().split(/\s+/).map(w => w[0]).join('').toUpperCase().slice(0,2);
+  }
+
+  // ── Load & render ─────────────────────────────────────
+  async function loadAndRender() {
+    document.getElementById('loading').style.display = 'flex';
+    document.getElementById('main').style.display    = 'none';
+    document.getElementById('error-box').style.display = 'none';
+
+    try {
+      const [rRes, tRes] = await Promise.all([
+        db.from('recipients').select('*').order('created_at'),
+        db.from('transactions').select('*').order('date', { ascending: false })
+      ]);
+
+      if (rRes.error) throw rRes.error;
+      if (tRes.error) throw tRes.error;
+
+      const recipients   = rRes.data || [];
+      const transactions = tRes.data || [];
+
+      render(recipients, transactions);
+
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('main').style.display    = 'block';
+
+      // Set date
+      document.getElementById('header-date').textContent =
+        'As of ' + new Date().toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' });
+
+    } catch (err) {
+      console.error(err);
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('error-box').style.display = 'block';
+      document.getElementById('error-msg').textContent = 'Could not load data. Check your connection.';
+    }
+  }
+
+  function render(recipients, transactions) {
+    // ── Summary strip ──
+    const totalUnpaid = transactions.filter(t => !t.paid).reduce((s,t) => s + t.cost, 0);
+    const totalPaid   = transactions.filter(t =>  t.paid).reduce((s,t) => s + t.cost, 0);
+    const totalSessions = transactions.length;
+
+    document.getElementById('summary-strip').innerHTML = `
+      <div class="strip-pill">
+        <div class="strip-val red">₱${totalUnpaid}</div>
+        <div class="strip-label">Total Owed</div>
+      </div>
+      <div class="strip-pill">
+        <div class="strip-val green">₱${totalPaid}</div>
+        <div class="strip-label">Total Paid</div>
+      </div>
+      <div class="strip-pill">
+        <div class="strip-val">${totalSessions}</div>
+        <div class="strip-label">Sessions</div>
+      </div>
+    `;
+
+    // ── Recipient list ──
+    const el = document.getElementById('rec-list');
+
+    if (!recipients.length) {
+      el.innerHTML = `<div class="no-data">
+        <div class="no-data-icon">💧</div>
+        <div class="no-data-text">No recipients yet</div>
+      </div>`;
+      return;
+    }
+
+    el.innerHTML = recipients.map((r, idx) => {
+      const txs     = transactions.filter(t => t.recipient_id === r.id);
+      const unpaid  = txs.filter(t => !t.paid).reduce((s,t) => s + t.cost, 0);
+      const col     = AVATAR_COLORS[idx % AVATAR_COLORS.length];
+      const hasDebt = unpaid > 0;
+      const sessCount = txs.length;
+
+      const txRows = txs.length ? txs.map(t => `
+        <div class="tx-item">
+          <div class="tx-left">
+            <div class="tx-date">${fmtDate(t.date)}</div>
+            <div class="tx-times">${fmtTime(t.sh, t.sm, t.sp)} → ${fmtTime(t.eh, t.em, t.ep)}</div>
+            <div class="tx-duration">${t.mins} min</div>
+          </div>
+          <div class="tx-right">
+            <span class="tx-status ${t.paid ? 'paid' : 'unpaid'}">${t.paid ? 'PAID ✓' : 'UNPAID'}</span>
+          </div>
+        </div>`).join('')
+      : `<div class="empty-tx">No sessions yet</div>`;
+
+      return `
+        <div class="rec-card" id="card-${r.id}">
+          <div class="rec-header" onclick="toggleCard('${r.id}')">
+            <div class="rec-avatar" style="background:${col.bg};color:${col.color}">${initials(r.name)}</div>
+            <div class="rec-info">
+              <div class="rec-name">${esc(r.name)}</div>
+              <div class="rec-meta">${sessCount} session${sessCount !== 1 ? 's' : ''}</div>
+            </div>
+            <div class="rec-right">
+              ${hasDebt
+                ? `<div class="rec-owe has-balance">₱${unpaid}</div>
+                   <div class="rec-owe-label">Owed</div>`
+                : `<div class="rec-owe no-balance">${sessCount ? 'All paid ✓' : 'Clear'}</div>`
+              }
+            </div>
+            <div class="rec-chevron">›</div>
+          </div>
+          <div class="tx-list" id="txlist-${r.id}">
+            <div class="tx-divider"></div>
+            ${txRows}
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  function toggleCard(id) {
+    const card = document.getElementById(`card-${id}`);
+    card.classList.toggle('open');
+  }
+
+  // ── Boot ──────────────────────────────────────────────
+  loadAndRender();
+</script>
+</body>
+</html>

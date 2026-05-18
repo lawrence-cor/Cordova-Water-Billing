@@ -13,29 +13,34 @@
    ══════════════════════════════════════════════════════ */
 
 // ── Supabase config ───────────────────────────────────
-const SUPABASE_URL  = 'https://eztutdgqsqkoivshflgv.supabase.co';
-const SUPABASE_ANON = 'sb_publishable_PRo6bOt_InAW4eaoBokiLw_CrXIwaHE';
+const SUPABASE_URL  = 'https://YOUR_PROJECT_ID.supabase.co';
+const SUPABASE_ANON = 'YOUR_ANON_PUBLIC_KEY';
 
 // ── Family password gate ──────────────────────────────
 const FAMILY_NAME = 'Cordova';
 const FAMILY_PASS = '1234';
-const AUTH_KEY    = 'bt_family_auth';   // localStorage key
+const AUTH_KEY    = 'bt_family_auth';   // localStorage key (auth only)
 
 // ─────────────────────────────────────────────────────
 //  SUPABASE CLIENT
 // ─────────────────────────────────────────────────────
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_ANON, {
-  auth: { persistSession: false }   // we handle our own session
+  auth: { persistSession: false }
 });
 
 // ─────────────────────────────────────────────────────
 //  IN-MEMORY STATE
 // ─────────────────────────────────────────────────────
-let recipients   = [];
-let transactions = [];
+let recipients    = [];
+let transactions  = [];
 let currentDetail = null;
 let clockInterval = null;
+
+// Shared timer state (mirrors active_session table row)
+// { id, recipient_id, recipient_name, started_at, stopped_at, state }
+// state: 'running' | 'stopped' | null (no active session)
+let sharedTimer = null;
 
 // ─────────────────────────────────────────────────────
 //  UTILITY
@@ -77,7 +82,6 @@ function fireNotification(title, body) {
   if (Notification.permission === 'granted') {
     new Notification(title, { body, icon: 'https://em-content.zobj.net/source/apple/391/droplet_1f4a7.png' });
   }
-  // Also show in-app toast so everyone on screen sees it too
   const type = title.toLowerCase().includes('finish') ? 'success' : 'warn';
   showToast(title, body, type);
 }
@@ -93,37 +97,104 @@ function renderNotifBar() {
 }
 
 // ─────────────────────────────────────────────────────
-//  SUPABASE REALTIME — broadcast timer events to all
-//  family members who have the app open
+//  SUPABASE REALTIME — listen for changes to
+//  active_session table so all devices stay in sync
 // ─────────────────────────────────────────────────────
 let realtimeChannel = null;
 
 function subscribeRealtime() {
-  realtimeChannel = db.channel('family-timer-events')
-    .on('broadcast', { event: 'timer' }, ({ payload }) => {
-      handleTimerBroadcast(payload);
-    })
+  // Listen to Postgres changes on the active_session table
+  realtimeChannel = db.channel('shared-timer-sync')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'active_session' },
+      (payload) => { handleSessionChange(payload); }
+    )
     .subscribe();
 }
 
-function broadcastTimerEvent(payload) {
-  if (!realtimeChannel) return;
-  realtimeChannel.send({ type: 'broadcast', event: 'timer', payload });
+async function handleSessionChange(payload) {
+  const prev = sharedTimer ? sharedTimer.state : null;
+
+  // Re-fetch the current session to get the latest truth
+  await loadActiveSession();
+
+  const cur = sharedTimer ? sharedTimer.state : null;
+
+  // Notify only when state actually transitions
+  if (prev !== cur) {
+    if (cur === 'running' && sharedTimer) {
+      const name = sharedTimer.recipient_name;
+      const t    = fmtFull(new Date(sharedTimer.started_at).getTime());
+      fireNotification('⏱ Session Started', `${name} started using water at ${t}`);
+    } else if (cur === null && prev === 'stopped') {
+      // Session was deleted (saved) – transactions reload handles the toast
+    } else if (cur === 'stopped' && sharedTimer) {
+      const name = sharedTimer.recipient_name;
+      const ms   = new Date(sharedTimer.stopped_at) - new Date(sharedTimer.started_at);
+      const { cost, mins } = calcCostMs(ms);
+      fireNotification('✅ Session Finished', `${name} finished using water. ${mins} min · ₱${cost}`);
+    }
+  }
+
+  renderTimer();
+  updateNavDot();
+
+  // If a transaction was just saved on another device, reload transactions
+  if (prev === 'stopped' && cur === null) {
+    await reloadTransactions();
+    renderHome();
+  }
 }
 
-function handleTimerBroadcast(payload) {
-  const { type, recipientName, startTime, cost, mins } = payload;
-  if (type === 'start') {
-    fireNotification(
-      `⏱ Session Started`,
-      `${recipientName} started using water at ${startTime}`
-    );
-  } else if (type === 'stop') {
-    fireNotification(
-      `✅ Session Finished`,
-      `${recipientName} finished using water at ${startTime}. ${mins} min · ₱${cost}`
-    );
-  }
+// ─────────────────────────────────────────────────────
+//  ACTIVE SESSION — Supabase table (single-row pattern)
+//  Table: active_session
+//  Columns: id (uuid PK), recipient_id, recipient_name,
+//           started_at (timestamptz), stopped_at (timestamptz),
+//           state (text: 'running' | 'stopped')
+// ─────────────────────────────────────────────────────
+async function loadActiveSession() {
+  const { data, error } = await db
+    .from('active_session')
+    .select('*')
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) { console.error('loadActiveSession:', error.message); sharedTimer = null; return; }
+  sharedTimer = data || null;
+}
+
+async function dbStartSession(rid, recipientName, startedAt) {
+  // Clear any stale session first (shouldn't normally exist)
+  await db.from('active_session').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  const { data, error } = await db.from('active_session').insert({
+    id: genId(),
+    recipient_id: rid,
+    recipient_name: recipientName,
+    started_at: new Date(startedAt).toISOString(),
+    stopped_at: null,
+    state: 'running'
+  }).select().single();
+  if (error) { console.error('dbStartSession:', error.message); return; }
+  sharedTimer = data;
+}
+
+async function dbStopSession() {
+  if (!sharedTimer) return;
+  const stoppedAt = new Date().toISOString();
+  const { data, error } = await db.from('active_session')
+    .update({ stopped_at: stoppedAt, state: 'stopped' })
+    .eq('id', sharedTimer.id)
+    .select().single();
+  if (error) { console.error('dbStopSession:', error.message); return; }
+  sharedTimer = data;
+}
+
+async function dbClearSession() {
+  await db.from('active_session').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  sharedTimer = null;
 }
 
 // ─────────────────────────────────────────────────────
@@ -177,7 +248,7 @@ async function showApp() {
   renderNotifBar();
   renderHome();
   refreshTxSelect();
-  restoreManualEntry();   // rebuild manual entry step from localStorage if pending
+  restoreManualEntry();
   updateNavDot();
   renderTimer();
   showLoading(false);
@@ -200,11 +271,17 @@ function boot() {
 async function loadData() {
   const [rRes, tRes] = await Promise.all([
     db.from('recipients').select('*').order('created_at'),
-    db.from('transactions').select('*').order('date', { ascending: false })
+    db.from('transactions').select('*').order('date', { ascending: false }),
+    loadActiveSession()
   ]);
 
   if (!rRes.error && rRes.data) recipients   = rRes.data.map(mapR);
   if (!tRes.error && tRes.data) transactions = tRes.data.map(mapT);
+}
+
+async function reloadTransactions() {
+  const { data, error } = await db.from('transactions').select('*').order('date', { ascending: false });
+  if (!error && data) transactions = data.map(mapT);
 }
 
 function mapR(r) { return { id: r.id, name: r.name }; }
@@ -285,80 +362,90 @@ function showView(id) {
 }
 
 // ─────────────────────────────────────────────────────
-//  AUTO TIMER  (localStorage backed for persistence)
-//  bt_ts = state: 'running' | 'stopped'  (absent = idle)
-//  bt_tr = recipient id
-//  bt_t0 = start timestamp (ms)
-//  bt_t1 = stop  timestamp (ms)
+//  AUTO TIMER  (shared state stored in Supabase)
+//
+//  sharedTimer mirrors the active_session table row.
+//  All devices read/write this row — localStorage is
+//  NO LONGER used for timer state.
 // ─────────────────────────────────────────────────────
-const LS = {
-  state: () => localStorage.getItem('bt_ts') || 'idle',
-  rid:   () => localStorage.getItem('bt_tr') || '',
-  t0:    () => parseInt(localStorage.getItem('bt_t0') || '0'),
-  t1:    () => parseInt(localStorage.getItem('bt_t1') || '0'),
-  set:   (state, rid, t0, t1) => {
-    state ? localStorage.setItem('bt_ts', state) : localStorage.removeItem('bt_ts');
-    rid   ? localStorage.setItem('bt_tr', rid)   : localStorage.removeItem('bt_tr');
-    t0    ? localStorage.setItem('bt_t0', t0)    : localStorage.removeItem('bt_t0');
-    t1    ? localStorage.setItem('bt_t1', t1)    : localStorage.removeItem('bt_t1');
-  },
-  clear: () => ['bt_ts', 'bt_tr', 'bt_t0', 'bt_t1'].forEach(k => localStorage.removeItem(k))
-};
-
-function timerStart() {
+async function timerStart() {
   const rid = document.getElementById('timer-recipient').value;
   if (!rid) { alert('Choose a recipient first!'); return; }
+
+  // Safety: check if another session is already running
+  await loadActiveSession();
+  if (sharedTimer && sharedTimer.state === 'running') {
+    alert('A session is already running! Stop it before starting a new one.');
+    renderTimer();
+    return;
+  }
+
   const rec = recipients.find(r => r.id === rid);
   const t0  = Date.now();
-  LS.set('running', rid, t0.toString(), null);
+  showLoading(true);
+  await dbStartSession(rid, rec.name, t0);
+  showLoading(false);
+
+  // Realtime will propagate to other devices; update this device immediately
   renderTimer();
   updateNavDot();
-
-  // Notify all family members
   const startTime = fmtFull(t0);
-  broadcastTimerEvent({ type: 'start', recipientName: rec.name, startTime });
   fireNotification('⏱ Session Started', `${rec.name} started using water at ${startTime}`);
 }
 
-function timerStop() {
-  if (LS.state() !== 'running') return;
+async function timerStop() {
+  if (!sharedTimer || sharedTimer.state !== 'running') return;
   clearInterval(clockInterval); clockInterval = null;
-  LS.set('stopped', LS.rid(), LS.t0().toString(), Date.now().toString());
+  showLoading(true);
+  await dbStopSession();
+  showLoading(false);
+
   renderTimer();
   updateNavDot();
+
+  const ms = new Date(sharedTimer.stopped_at) - new Date(sharedTimer.started_at);
+  const { cost, mins } = calcCostMs(ms);
+  const endTime = fmtFull(new Date(sharedTimer.stopped_at).getTime());
+  fireNotification('✅ Session Stopped', `${sharedTimer.recipient_name} finished. ${mins} min · ₱${cost}`);
 }
 
 async function timerSave() {
-  const rid = LS.rid();
-  const rec = recipients.find(r => r.id === rid);
-  if (!rec) { alert('Recipient not found!'); timerDiscard(); return; }
+  if (!sharedTimer || sharedTimer.state !== 'stopped') return;
 
-  const ms = LS.t1() - LS.t0();
+  const rid = sharedTimer.recipient_id;
+  const rec = recipients.find(r => r.id === rid);
+  if (!rec) { alert('Recipient not found!'); await timerDiscard(); return; }
+
+  const t0 = new Date(sharedTimer.started_at).getTime();
+  const t1 = new Date(sharedTimer.stopped_at).getTime();
+  const ms = t1 - t0;
   const { cost, mins } = calcCostMs(ms);
-  const s = msTo12(LS.t0()), e = msTo12(LS.t1());
+  const s = msTo12(t0), e = msTo12(t1);
   const tx = {
     id: genId(), recipientId: rid, recipientName: rec.name,
     sh: s.h, sm: s.m, sp: s.p, eh: e.h, em: e.m, ep: e.p,
-    mins, cost, paid: false, date: new Date(LS.t0()).toISOString()
+    mins, cost, paid: false, date: new Date(t0).toISOString()
   };
 
   transactions.unshift(tx);
+  showLoading(true);
   await dbInsertTransaction(tx);
+  await dbClearSession();  // removes the row — triggers realtime on other devices
+  showLoading(false);
 
-  // Notify all family members
-  const endTime = fmtFull(LS.t1());
-  broadcastTimerEvent({ type: 'stop', recipientName: rec.name, startTime: endTime, cost, mins });
-  fireNotification('✅ Session Finished', `${rec.name} finished using water. ${mins} min · ₱${cost}`);
-
-  LS.clear();
+  fireNotification('💾 Saved', `${rec.name} · ${mins} min · ₱${cost}`);
   renderTimer();
   updateNavDot();
   renderHome();
 }
 
-function timerDiscard() {
+async function timerDiscard() {
   clearInterval(clockInterval); clockInterval = null;
-  LS.clear(); renderTimer(); updateNavDot();
+  showLoading(true);
+  await dbClearSession();
+  showLoading(false);
+  renderTimer();
+  updateNavDot();
 }
 
 function msTo12(ms) {
@@ -373,8 +460,13 @@ function fmtFull(ms) {
   return new Date(ms).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
+function timerState() {
+  if (!sharedTimer) return 'idle';
+  return sharedTimer.state; // 'running' | 'stopped'
+}
+
 function renderTimer() {
-  const state = LS.state();
+  const state = timerState();
   document.getElementById('tp-idle').style.display    = state === 'idle'    ? 'block' : 'none';
   document.getElementById('tp-running').style.display = state === 'running' ? 'block' : 'none';
   document.getElementById('tp-preview').style.display = state === 'stopped' ? 'block' : 'none';
@@ -383,22 +475,25 @@ function renderTimer() {
   if (state === 'idle') {
     buildTimerSelect();
   } else if (state === 'running') {
-    const rec = recipients.find(r => r.id === LS.rid());
-    document.getElementById('tr-name').textContent    = rec ? rec.name : '—';
-    document.getElementById('tr-started').textContent = 'Started at ' + fmtFull(LS.t0());
-    const tick = () => { document.getElementById('tr-clock').textContent = fmtElapsed(Date.now() - LS.t0()); };
+    const name = sharedTimer.recipient_name;
+    const t0   = new Date(sharedTimer.started_at).getTime();
+    document.getElementById('tr-name').textContent    = name;
+    document.getElementById('tr-started').textContent = 'Started at ' + fmtFull(t0);
+    const tick = () => { document.getElementById('tr-clock').textContent = fmtElapsed(Date.now() - t0); };
     tick(); clockInterval = setInterval(tick, 1000);
   } else if (state === 'stopped') {
-    const rec = recipients.find(r => r.id === LS.rid());
-    const ms = LS.t1() - LS.t0();
+    const name = sharedTimer.recipient_name;
+    const t0   = new Date(sharedTimer.started_at).getTime();
+    const t1   = new Date(sharedTimer.stopped_at).getTime();
+    const ms   = t1 - t0;
     const { cost, mins } = calcCostMs(ms);
-    const s = msTo12(LS.t0()), e = msTo12(LS.t1());
+    const s = msTo12(t0), e = msTo12(t1);
     document.getElementById('tp-preview-inner').innerHTML = `
       <div style="font-size:10px;font-weight:800;letter-spacing:2.5px;color:var(--accent);text-transform:uppercase;margin-bottom:8px">Session Complete</div>
-      <div style="font-weight:800;font-size:17px;margin-bottom:16px">${rec ? esc(rec.name) : '—'}</div>
+      <div style="font-weight:800;font-size:17px;margin-bottom:16px">${esc(name)}</div>
       <div class="result-amount">&#8369;${cost}</div>
       <div class="result-sub">${mins} min &nbsp;&#183;&nbsp; ${fmtTime(s.h, s.m, s.p)} &#8594; ${fmtTime(e.h, e.m, e.p)}</div>
-      <div style="font-size:12px;color:var(--muted);font-family:var(--mono);margin-top:4px">${fmtFull(LS.t0())} &#8594; ${fmtFull(LS.t1())}</div>`;
+      <div style="font-size:12px;color:var(--muted);font-family:var(--mono);margin-top:4px">${fmtFull(t0)} &#8594; ${fmtFull(t1)}</div>`;
   }
 }
 
@@ -430,10 +525,84 @@ async function saveTimerNewRec() {
 }
 
 function updateNavDot() {
-  const st = LS.state();
+  const st = timerState();
   document.getElementById('nav-live-dot').classList.toggle('on', st === 'running');
   const sub = document.getElementById('home-timer-sub');
   if (sub) sub.textContent = st === 'running' ? 'Session running…' : st === 'stopped' ? 'Tap to review' : 'Tap to start';
+}
+
+// ─────────────────────────────────────────────────────
+//  SAVE AS IMAGE  (html2canvas)
+//  Called from the timer preview & manual result cards
+// ─────────────────────────────────────────────────────
+async function saveAsImage(cardId) {
+  const card = document.getElementById(cardId);
+  if (!card) return;
+
+  // Build a styled off-screen snapshot element
+  const wrap = document.createElement('div');
+  wrap.style.cssText = `
+    position:fixed; left:-9999px; top:-9999px;
+    width:360px; background:#080b12;
+    border-radius:24px; padding:32px 28px;
+    font-family:'Sora',sans-serif; color:#f0f6ff;
+    border:1.5px solid rgba(56,189,248,0.25);
+    box-shadow: 0 24px 64px rgba(0,0,0,0.6);
+  `;
+
+  // Cordova family badge
+  const badge = document.createElement('div');
+  badge.style.cssText = 'text-align:center;margin-bottom:20px';
+  badge.innerHTML = `
+    <div style="font-size:36px;margin-bottom:6px">💧</div>
+    <div style="font-size:13px;font-weight:900;letter-spacing:3px;color:#38bdf8;text-transform:uppercase">Cordova Billing</div>
+  `;
+  wrap.appendChild(badge);
+
+  // Clone the receipt card
+  const clone = card.cloneNode(true);
+  clone.style.cssText = 'margin:0;border:none;background:transparent;animation:none;';
+  wrap.appendChild(clone);
+
+  // Timestamp footer
+  const footer = document.createElement('div');
+  footer.style.cssText = 'text-align:center;margin-top:18px;font-size:11px;color:#64748b;letter-spacing:1px;font-family:DM Mono,monospace';
+  footer.textContent = new Date().toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' });
+  wrap.appendChild(footer);
+
+  document.body.appendChild(wrap);
+
+  try {
+    // Dynamically load html2canvas if not already present
+    if (!window.html2canvas) {
+      await new Promise((res, rej) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+        s.onload = res; s.onerror = rej;
+        document.head.appendChild(s);
+      });
+    }
+
+    const canvas = await html2canvas(wrap, {
+      backgroundColor: '#080b12',
+      scale: 2,
+      useCORS: true,
+      logging: false
+    });
+
+    // Download
+    const link = document.createElement('a');
+    link.download = `cordova-billing-${Date.now()}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+
+    showToast('📸 Image Saved', 'Transaction screenshot downloaded!', 'success');
+  } catch (err) {
+    console.error('saveAsImage:', err);
+    showToast('⚠️ Error', 'Could not save image. Try again.', '');
+  } finally {
+    document.body.removeChild(wrap);
+  }
 }
 
 // ─────────────────────────────────────────────────────
@@ -452,24 +621,19 @@ function clampH(el) { let v = parseInt(el.value) || 0; if (v > 12) el.value = 12
 function clampM(el) { let v = parseInt(el.value) || 0; if (v > 59) el.value = 59; if (v < 0) el.value = ''; }
 function togglePeriod(id) { const el = document.getElementById(id); el.textContent = el.textContent === 'AM' ? 'PM' : 'AM'; }
 
-// Called on showView('view-newtx') and on app boot — restores saved state
 function restoreManualEntry() {
   const saved = msLoad();
   if (saved) {
-    // Rebuild step 1 fields from saved state
     document.getElementById('sh').value            = saved.sh;
     document.getElementById('sm').value            = fmt2(saved.sm);
     document.getElementById('sp').textContent      = saved.sp;
-    // Restore recipient selection after refreshTxSelect populates the list
     refreshTxSelect();
     document.getElementById('tx-recipient').value  = saved.rid || '';
-    // Show the locked banner and go to step 2
     document.getElementById('start-locked-time').textContent = fmtTime(saved.sh, saved.sm, saved.sp);
     document.getElementById('step-start').style.display = 'none';
     document.getElementById('step-end').style.display   = 'block';
     document.getElementById('result-box').style.display = 'none';
   } else {
-    // Nothing saved — clean step 1
     _clearManualUI();
   }
 }
@@ -482,26 +646,17 @@ function setStartTime() {
   const sp = document.getElementById('sp').textContent;
   if (!sh) { alert('Enter a valid start hour!'); return; }
 
-  // Persist to localStorage so refresh/exit won't lose it
   msSave({ sh, sm, sp, rid });
-
-  // Show locked banner
   document.getElementById('start-locked-time').textContent = fmtTime(sh, sm, sp);
-
-  // Switch steps
   document.getElementById('step-start').style.display = 'none';
   document.getElementById('step-end').style.display   = 'block';
   document.getElementById('result-box').style.display = 'none';
-
-  // Clear end time fields
   ['eh', 'em'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('ep').textContent = 'PM';
-
   window.scrollTo(0, 0);
 }
 
 function editStartTime() {
-  // Keep localStorage — user is just editing, not discarding
   msClear();
   document.getElementById('step-end').style.display   = 'none';
   document.getElementById('step-start').style.display = 'block';
@@ -514,7 +669,6 @@ function discardManualEntry() {
   _clearManualUI();
 }
 
-// Internal — resets all fields and goes back to step 1, no localStorage touch
 function _clearManualUI() {
   ['sh', 'sm', 'eh', 'em'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('sp').textContent = 'AM';
@@ -543,7 +697,6 @@ async function saveInlineRecipient() {
   document.getElementById('add-inline').style.display = 'none';
   refreshTxSelect();
   document.getElementById('tx-recipient').value = r.id;
-  // Update persisted rid if we're already in step 2
   const saved = msLoad();
   if (saved) { saved.rid = r.id; msSave(saved); }
 }
@@ -567,14 +720,17 @@ function calculate() {
   const ep = document.getElementById('ep').textContent;
   if (!eh) { alert('Enter a valid end hour!'); return; }
   const res = calcCostHM(sh, sm, sp, eh, em, ep);
+  const rec = recipients.find(r => r.id === rid);
   const box = document.getElementById('result-box');
   box.style.display = 'block';
   box.innerHTML = `
-    <div class="result-card">
+    <div class="result-card" id="manual-receipt-card">
       <div style="font-size:10px;font-weight:800;letter-spacing:2.5px;color:var(--accent);text-transform:uppercase;margin-bottom:4px">Result</div>
+      <div style="font-weight:800;font-size:15px;margin-bottom:8px;color:var(--text)">${esc(rec ? rec.name : '—')}</div>
       <div class="result-amount">&#8369;${res.cost}</div>
       <div class="result-sub">${res.mins} min &nbsp;&#183;&nbsp; ${fmtTime(sh, sm, sp)} &#8594; ${fmtTime(eh, em, ep)}</div>
       <button class="btn-primary" style="margin-top:12px" onclick="saveTxManual('${rid}',${sh},${sm},'${sp}',${eh},${em},'${ep}',${res.cost},${res.mins})">Save Transaction</button>
+      <button class="btn-save-img" onclick="saveAsImage('manual-receipt-card')">📸 Save as Image</button>
     </div>`;
 }
 
@@ -584,7 +740,6 @@ async function saveTxManual(rid, sh, sm, sp, eh, em, ep, cost, mins) {
   const tx = { id: genId(), recipientId: rid, recipientName: rec.name, sh, sm, sp, eh, em, ep, mins, cost, paid: false, date: new Date().toISOString() };
   transactions.unshift(tx);
   await dbInsertTransaction(tx);
-  // Clear persistence — transaction is now saved
   msClear();
   document.getElementById('result-box').innerHTML = `
     <div class="result-card success">
@@ -595,7 +750,6 @@ async function saveTxManual(rid, sh, sm, sp, eh, em, ep, cost, mins) {
   renderHome();
 }
 
-// Called after a successful save or "+ Add Another" — full clean reset
 function resetNewTx() {
   msClear();
   _clearManualUI();
@@ -619,7 +773,7 @@ async function deleteRecipient(id) {
   if (!confirm('Delete this recipient and all their transactions?')) return;
   recipients = recipients.filter(r => r.id !== id);
   transactions = transactions.filter(t => t.recipientId !== id);
-  await dbDeleteRecipient(id);   // cascade deletes transactions in DB
+  await dbDeleteRecipient(id);
   renderRecipients();
 }
 
