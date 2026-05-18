@@ -13,8 +13,8 @@
    ══════════════════════════════════════════════════════ */
 
 // ── Supabase config ───────────────────────────────────
-const SUPABASE_URL  = 'https://eztutdgqsqkoivshflgv.supabase.co';
-const SUPABASE_ANON = 'sb_publishable_PRo6bOt_InAW4eaoBokiLw_CrXIwaHE';
+const SUPABASE_URL  = 'https://YOUR_PROJECT_ID.supabase.co';
+const SUPABASE_ANON = 'YOUR_ANON_PUBLIC_KEY';
 
 // ── Family password gate ──────────────────────────────
 const FAMILY_NAME = 'Cordova';
@@ -35,12 +35,6 @@ const db = createClient(SUPABASE_URL, SUPABASE_ANON, {
 let recipients    = [];
 let transactions  = [];
 let currentDetail = null;
-let clockInterval = null;
-
-// Shared timer state (mirrors active_session table row)
-// { id, recipient_id, recipient_name, started_at, stopped_at, state }
-// state: 'running' | 'stopped' | null (no active session)
-let sharedTimer = null;
 
 // ─────────────────────────────────────────────────────
 //  UTILITY
@@ -66,135 +60,6 @@ function showToast(title, body, type = '') {
     el.style.opacity = '0'; el.style.transform = 'translateY(-8px) scale(.97)';
     setTimeout(() => el.remove(), 420);
   }, 4500);
-}
-
-// ─────────────────────────────────────────────────────
-//  PUSH / BROWSER NOTIFICATIONS
-// ─────────────────────────────────────────────────────
-async function requestNotifPermission() {
-  if (!('Notification' in window)) return;
-  const perm = await Notification.requestPermission();
-  renderNotifBar();
-  if (perm === 'granted') showToast('Notifications on', 'You\'ll be notified when sessions start & stop.', 'success');
-}
-
-function fireNotification(title, body) {
-  if (Notification.permission === 'granted') {
-    new Notification(title, { body, icon: 'https://em-content.zobj.net/source/apple/391/droplet_1f4a7.png' });
-  }
-  const type = title.toLowerCase().includes('finish') ? 'success' : 'warn';
-  showToast(title, body, type);
-}
-
-function renderNotifBar() {
-  const bar = document.getElementById('notif-bar');
-  if (!bar) return;
-  if (!('Notification' in window) || Notification.permission === 'granted') {
-    bar.style.display = 'none';
-  } else {
-    bar.style.display = 'flex';
-  }
-}
-
-// ─────────────────────────────────────────────────────
-//  SUPABASE REALTIME — listen for changes to
-//  active_session table so all devices stay in sync
-// ─────────────────────────────────────────────────────
-let realtimeChannel = null;
-
-function subscribeRealtime() {
-  // Listen to Postgres changes on the active_session table
-  realtimeChannel = db.channel('shared-timer-sync')
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'active_session' },
-      (payload) => { handleSessionChange(payload); }
-    )
-    .subscribe();
-}
-
-async function handleSessionChange(payload) {
-  const prev = sharedTimer ? sharedTimer.state : null;
-
-  // Re-fetch the current session to get the latest truth
-  await loadActiveSession();
-
-  const cur = sharedTimer ? sharedTimer.state : null;
-
-  // Notify only when state actually transitions
-  if (prev !== cur) {
-    if (cur === 'running' && sharedTimer) {
-      const name = sharedTimer.recipient_name;
-      const t    = fmtFull(new Date(sharedTimer.started_at).getTime());
-      fireNotification('⏱ Session Started', `${name} started using water at ${t}`);
-    } else if (cur === null && prev === 'stopped') {
-      // Session was deleted (saved) – transactions reload handles the toast
-    } else if (cur === 'stopped' && sharedTimer) {
-      const name = sharedTimer.recipient_name;
-      const ms   = new Date(sharedTimer.stopped_at) - new Date(sharedTimer.started_at);
-      const { cost, mins } = calcCostMs(ms);
-      fireNotification('✅ Session Finished', `${name} finished using water. ${mins} min · ₱${cost}`);
-    }
-  }
-
-  renderTimer();
-  updateNavDot();
-
-  // If a transaction was just saved on another device, reload transactions
-  if (prev === 'stopped' && cur === null) {
-    await reloadTransactions();
-    renderHome();
-  }
-}
-
-// ─────────────────────────────────────────────────────
-//  ACTIVE SESSION — Supabase table (single-row pattern)
-//  Table: active_session
-//  Columns: id (uuid PK), recipient_id, recipient_name,
-//           started_at (timestamptz), stopped_at (timestamptz),
-//           state (text: 'running' | 'stopped')
-// ─────────────────────────────────────────────────────
-async function loadActiveSession() {
-  const { data, error } = await db
-    .from('active_session')
-    .select('*')
-    .order('started_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) { console.error('loadActiveSession:', error.message); sharedTimer = null; return; }
-  sharedTimer = data || null;
-}
-
-async function dbStartSession(rid, recipientName, startedAt) {
-  // Clear any stale session first (shouldn't normally exist)
-  await db.from('active_session').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-  const { data, error } = await db.from('active_session').insert({
-    id: genId(),
-    recipient_id: rid,
-    recipient_name: recipientName,
-    started_at: new Date(startedAt).toISOString(),
-    stopped_at: null,
-    state: 'running'
-  }).select().single();
-  if (error) { console.error('dbStartSession:', error.message); return; }
-  sharedTimer = data;
-}
-
-async function dbStopSession() {
-  if (!sharedTimer) return;
-  const stoppedAt = new Date().toISOString();
-  const { data, error } = await db.from('active_session')
-    .update({ stopped_at: stoppedAt, state: 'stopped' })
-    .eq('id', sharedTimer.id)
-    .select().single();
-  if (error) { console.error('dbStopSession:', error.message); return; }
-  sharedTimer = data;
-}
-
-async function dbClearSession() {
-  await db.from('active_session').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-  sharedTimer = null;
 }
 
 // ─────────────────────────────────────────────────────
@@ -244,14 +109,10 @@ async function showApp() {
   document.getElementById('app-shell').style.display    = 'block';
   showLoading(true);
   await loadData();
-  subscribeRealtime();
-  renderNotifBar();
   renderHome();
   refreshTxSelect();
-  restoreManualEntry();
-  updateNavDot();
-  renderTimer();
   showLoading(false);
+  // restoreManualEntry fetches pendingSession itself when the view is opened
 }
 
 function boot() {
@@ -271,17 +132,11 @@ function boot() {
 async function loadData() {
   const [rRes, tRes] = await Promise.all([
     db.from('recipients').select('*').order('created_at'),
-    db.from('transactions').select('*').order('date', { ascending: false }),
-    loadActiveSession()
+    db.from('transactions').select('*').order('date', { ascending: false })
   ]);
 
   if (!rRes.error && rRes.data) recipients   = rRes.data.map(mapR);
   if (!tRes.error && tRes.data) transactions = tRes.data.map(mapT);
-}
-
-async function reloadTransactions() {
-  const { data, error } = await db.from('transactions').select('*').order('date', { ascending: false });
-  if (!error && data) transactions = data.map(mapT);
 }
 
 function mapR(r) { return { id: r.id, name: r.name }; }
@@ -333,18 +188,15 @@ function calcCostHM(sh, sm, sp, eh, em, ep) {
   return { cost: Math.floor(mins / 5) * 6 + (mins % 5), mins };
 }
 
-function calcCostMs(ms) {
-  const mins = Math.floor(ms / 60000);
-  return { cost: Math.floor(mins / 5) * 6 + (mins % 5), mins };
-}
-
 // ─────────────────────────────────────────────────────
 //  NAV
 // ─────────────────────────────────────────────────────
 const NAV_MAP = {
-  'view-home': 'nav-home', 'view-timer': 'nav-timer', 'view-newtx': 'nav-newtx',
-  'view-recipients': 'nav-recipients', 'view-history': 'nav-history',
-  'view-detail': 'nav-recipients'
+  'view-home':       'nav-home',
+  'view-newtx':      'nav-newtx',
+  'view-recipients': 'nav-recipients',
+  'view-history':    'nav-history',
+  'view-detail':     'nav-recipients'
 };
 
 function showView(id) {
@@ -357,189 +209,16 @@ function showView(id) {
   if (id === 'view-newtx')      restoreManualEntry();
   if (id === 'view-recipients') renderRecipients();
   if (id === 'view-history')    renderHistory();
-  if (id === 'view-timer')      renderTimer();
   window.scrollTo(0, 0);
 }
 
 // ─────────────────────────────────────────────────────
-//  AUTO TIMER  (shared state stored in Supabase)
-//
-//  sharedTimer mirrors the active_session table row.
-//  All devices read/write this row — localStorage is
-//  NO LONGER used for timer state.
-// ─────────────────────────────────────────────────────
-async function timerStart() {
-  const rid = document.getElementById('timer-recipient').value;
-  if (!rid) { alert('Choose a recipient first!'); return; }
-
-  // Safety: check if another session is already running
-  await loadActiveSession();
-  if (sharedTimer && sharedTimer.state === 'running') {
-    alert('A session is already running! Stop it before starting a new one.');
-    renderTimer();
-    return;
-  }
-
-  const rec = recipients.find(r => r.id === rid);
-  const t0  = Date.now();
-  showLoading(true);
-  await dbStartSession(rid, rec.name, t0);
-  showLoading(false);
-
-  // Realtime will propagate to other devices; update this device immediately
-  renderTimer();
-  updateNavDot();
-  const startTime = fmtFull(t0);
-  fireNotification('⏱ Session Started', `${rec.name} started using water at ${startTime}`);
-}
-
-async function timerStop() {
-  if (!sharedTimer || sharedTimer.state !== 'running') return;
-  clearInterval(clockInterval); clockInterval = null;
-  showLoading(true);
-  await dbStopSession();
-  showLoading(false);
-
-  renderTimer();
-  updateNavDot();
-
-  const ms = new Date(sharedTimer.stopped_at) - new Date(sharedTimer.started_at);
-  const { cost, mins } = calcCostMs(ms);
-  const endTime = fmtFull(new Date(sharedTimer.stopped_at).getTime());
-  fireNotification('✅ Session Stopped', `${sharedTimer.recipient_name} finished. ${mins} min · ₱${cost}`);
-}
-
-async function timerSave() {
-  if (!sharedTimer || sharedTimer.state !== 'stopped') return;
-
-  const rid = sharedTimer.recipient_id;
-  const rec = recipients.find(r => r.id === rid);
-  if (!rec) { alert('Recipient not found!'); await timerDiscard(); return; }
-
-  const t0 = new Date(sharedTimer.started_at).getTime();
-  const t1 = new Date(sharedTimer.stopped_at).getTime();
-  const ms = t1 - t0;
-  const { cost, mins } = calcCostMs(ms);
-  const s = msTo12(t0), e = msTo12(t1);
-  const tx = {
-    id: genId(), recipientId: rid, recipientName: rec.name,
-    sh: s.h, sm: s.m, sp: s.p, eh: e.h, em: e.m, ep: e.p,
-    mins, cost, paid: false, date: new Date(t0).toISOString()
-  };
-
-  transactions.unshift(tx);
-  showLoading(true);
-  await dbInsertTransaction(tx);
-  await dbClearSession();  // removes the row — triggers realtime on other devices
-  showLoading(false);
-
-  fireNotification('💾 Saved', `${rec.name} · ${mins} min · ₱${cost}`);
-  renderTimer();
-  updateNavDot();
-  renderHome();
-}
-
-async function timerDiscard() {
-  clearInterval(clockInterval); clockInterval = null;
-  showLoading(true);
-  await dbClearSession();
-  showLoading(false);
-  renderTimer();
-  updateNavDot();
-}
-
-function msTo12(ms) {
-  const d = new Date(ms); let h = d.getHours(); const m = d.getMinutes();
-  const p = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12; return { h, m, p };
-}
-function fmtElapsed(ms) {
-  const t = Math.floor(ms / 1000);
-  return `${fmt2(Math.floor(t / 3600))}:${fmt2(Math.floor((t % 3600) / 60))}:${fmt2(t % 60)}`;
-}
-function fmtFull(ms) {
-  return new Date(ms).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
-function timerState() {
-  if (!sharedTimer) return 'idle';
-  return sharedTimer.state; // 'running' | 'stopped'
-}
-
-function renderTimer() {
-  const state = timerState();
-  document.getElementById('tp-idle').style.display    = state === 'idle'    ? 'block' : 'none';
-  document.getElementById('tp-running').style.display = state === 'running' ? 'block' : 'none';
-  document.getElementById('tp-preview').style.display = state === 'stopped' ? 'block' : 'none';
-  clearInterval(clockInterval); clockInterval = null;
-
-  if (state === 'idle') {
-    buildTimerSelect();
-  } else if (state === 'running') {
-    const name = sharedTimer.recipient_name;
-    const t0   = new Date(sharedTimer.started_at).getTime();
-    document.getElementById('tr-name').textContent    = name;
-    document.getElementById('tr-started').textContent = 'Started at ' + fmtFull(t0);
-    const tick = () => { document.getElementById('tr-clock').textContent = fmtElapsed(Date.now() - t0); };
-    tick(); clockInterval = setInterval(tick, 1000);
-  } else if (state === 'stopped') {
-    const name = sharedTimer.recipient_name;
-    const t0   = new Date(sharedTimer.started_at).getTime();
-    const t1   = new Date(sharedTimer.stopped_at).getTime();
-    const ms   = t1 - t0;
-    const { cost, mins } = calcCostMs(ms);
-    const s = msTo12(t0), e = msTo12(t1);
-    document.getElementById('tp-preview-inner').innerHTML = `
-      <div style="font-size:10px;font-weight:800;letter-spacing:2.5px;color:var(--accent);text-transform:uppercase;margin-bottom:8px">Session Complete</div>
-      <div style="font-weight:800;font-size:17px;margin-bottom:16px">${esc(name)}</div>
-      <div class="result-amount">&#8369;${cost}</div>
-      <div class="result-sub">${mins} min &nbsp;&#183;&nbsp; ${fmtTime(s.h, s.m, s.p)} &#8594; ${fmtTime(e.h, e.m, e.p)}</div>
-      <div style="font-size:12px;color:var(--muted);font-family:var(--mono);margin-top:4px">${fmtFull(t0)} &#8594; ${fmtFull(t1)}</div>`;
-  }
-}
-
-function buildTimerSelect() {
-  const sel = document.getElementById('timer-recipient');
-  const cur = sel.value;
-  sel.innerHTML = '<option value="">— Select recipient —</option>' +
-    recipients.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('');
-  if (cur) sel.value = cur;
-}
-
-function toggleTimerAdd() {
-  const el = document.getElementById('timer-add-row');
-  el.style.display = el.style.display === 'none' ? 'block' : 'none';
-  if (el.style.display === 'block') document.getElementById('timer-new-name').focus();
-}
-
-async function saveTimerNewRec() {
-  const name = document.getElementById('timer-new-name').value.trim();
-  if (!name) return;
-  if (recipients.find(r => r.name.toLowerCase() === name.toLowerCase())) { alert('Already exists!'); return; }
-  const r = { id: genId(), name };
-  recipients.push(r);
-  await dbInsertRecipient(r);
-  document.getElementById('timer-new-name').value = '';
-  document.getElementById('timer-add-row').style.display = 'none';
-  buildTimerSelect();
-  document.getElementById('timer-recipient').value = r.id;
-}
-
-function updateNavDot() {
-  const st = timerState();
-  document.getElementById('nav-live-dot').classList.toggle('on', st === 'running');
-  const sub = document.getElementById('home-timer-sub');
-  if (sub) sub.textContent = st === 'running' ? 'Session running…' : st === 'stopped' ? 'Tap to review' : 'Tap to start';
-}
-
-// ─────────────────────────────────────────────────────
 //  SAVE AS IMAGE  (html2canvas)
-//  Called from the timer preview & manual result cards
 // ─────────────────────────────────────────────────────
 async function saveAsImage(cardId) {
   const card = document.getElementById(cardId);
   if (!card) return;
 
-  // Build a styled off-screen snapshot element
   const wrap = document.createElement('div');
   wrap.style.cssText = `
     position:fixed; left:-9999px; top:-9999px;
@@ -550,7 +229,6 @@ async function saveAsImage(cardId) {
     box-shadow: 0 24px 64px rgba(0,0,0,0.6);
   `;
 
-  // Cordova family badge
   const badge = document.createElement('div');
   badge.style.cssText = 'text-align:center;margin-bottom:20px';
   badge.innerHTML = `
@@ -559,12 +237,10 @@ async function saveAsImage(cardId) {
   `;
   wrap.appendChild(badge);
 
-  // Clone the receipt card
   const clone = card.cloneNode(true);
   clone.style.cssText = 'margin:0;border:none;background:transparent;animation:none;';
   wrap.appendChild(clone);
 
-  // Timestamp footer
   const footer = document.createElement('div');
   footer.style.cssText = 'text-align:center;margin-top:18px;font-size:11px;color:#64748b;letter-spacing:1px;font-family:DM Mono,monospace';
   footer.textContent = new Date().toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' });
@@ -573,7 +249,6 @@ async function saveAsImage(cardId) {
   document.body.appendChild(wrap);
 
   try {
-    // Dynamically load html2canvas if not already present
     if (!window.html2canvas) {
       await new Promise((res, rej) => {
         const s = document.createElement('script');
@@ -590,7 +265,6 @@ async function saveAsImage(cardId) {
       logging: false
     });
 
-    // Download
     const link = document.createElement('a');
     link.download = `cordova-billing-${Date.now()}.png`;
     link.href = canvas.toDataURL('image/png');
@@ -606,29 +280,61 @@ async function saveAsImage(cardId) {
 }
 
 // ─────────────────────────────────────────────────────
-//  MANUAL ENTRY
-//  bt_ms = JSON { sh, sm, sp, rid } — persists across
-//          refreshes/exits until end time is saved or
-//          user explicitly discards
+//  MANUAL ENTRY — shared via Supabase pending_session
+//
+//  Table: pending_session
+//  Columns: id (uuid PK), recipient_id (text),
+//           recipient_name (text), sh (int), sm (int),
+//           sp (text), created_at (timestamptz)
+//
+//  Only one row ever exists (singleton pattern).
+//  All devices read/write this same row so every
+//  family member sees the same locked start time.
 // ─────────────────────────────────────────────────────
-const MS_KEY = 'bt_ms';
 
-function msLoad()        { try { return JSON.parse(localStorage.getItem(MS_KEY)); } catch { return null; } }
-function msSave(o)       { localStorage.setItem(MS_KEY, JSON.stringify(o)); }
-function msClear()       { localStorage.removeItem(MS_KEY); }
+// In-memory mirror of the pending_session row
+// { id, recipient_id, recipient_name, sh, sm, sp } | null
+let pendingSession = null;
+
+async function psLoad() {
+  const { data, error } = await db
+    .from('pending_session')
+    .select('*')
+    .limit(1)
+    .maybeSingle();
+  if (error) { console.error('psLoad:', error.message); pendingSession = null; return; }
+  pendingSession = data || null;
+}
+
+async function psSave(rid, recipientName, sh, sm, sp) {
+  // Delete any existing row first (singleton)
+  await db.from('pending_session').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  const { data, error } = await db.from('pending_session').insert({
+    id: genId(), recipient_id: rid, recipient_name: recipientName,
+    sh, sm, sp
+  }).select().single();
+  if (error) { console.error('psSave:', error.message); return; }
+  pendingSession = data;
+}
+
+async function psClear() {
+  await db.from('pending_session').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  pendingSession = null;
+}
 
 function clampH(el) { let v = parseInt(el.value) || 0; if (v > 12) el.value = 12; if (v < 0) el.value = ''; }
 function clampM(el) { let v = parseInt(el.value) || 0; if (v > 59) el.value = 59; if (v < 0) el.value = ''; }
 function togglePeriod(id) { const el = document.getElementById(id); el.textContent = el.textContent === 'AM' ? 'PM' : 'AM'; }
 
-function restoreManualEntry() {
-  const saved = msLoad();
+async function restoreManualEntry() {
+  // Always fetch latest from Supabase so all devices stay in sync
+  showLoading(true);
+  await psLoad();
+  showLoading(false);
+  const saved = pendingSession;
   if (saved) {
-    document.getElementById('sh').value            = saved.sh;
-    document.getElementById('sm').value            = fmt2(saved.sm);
-    document.getElementById('sp').textContent      = saved.sp;
     refreshTxSelect();
-    document.getElementById('tx-recipient').value  = saved.rid || '';
+    document.getElementById('tx-recipient').value  = saved.recipient_id || '';
     document.getElementById('start-locked-time').textContent = fmtTime(saved.sh, saved.sm, saved.sp);
     document.getElementById('step-start').style.display = 'none';
     document.getElementById('step-end').style.display   = 'block';
@@ -638,7 +344,7 @@ function restoreManualEntry() {
   }
 }
 
-function setStartTime() {
+async function setStartTime() {
   const rid = document.getElementById('tx-recipient').value;
   if (!rid) { alert('Choose a recipient first!'); return; }
   const sh = parseInt(document.getElementById('sh').value) || 0;
@@ -646,7 +352,11 @@ function setStartTime() {
   const sp = document.getElementById('sp').textContent;
   if (!sh) { alert('Enter a valid start hour!'); return; }
 
-  msSave({ sh, sm, sp, rid });
+  const rec = recipients.find(r => r.id === rid);
+  showLoading(true);
+  await psSave(rid, rec ? rec.name : rid, sh, sm, sp);
+  showLoading(false);
+
   document.getElementById('start-locked-time').textContent = fmtTime(sh, sm, sp);
   document.getElementById('step-start').style.display = 'none';
   document.getElementById('step-end').style.display   = 'block';
@@ -656,16 +366,20 @@ function setStartTime() {
   window.scrollTo(0, 0);
 }
 
-function editStartTime() {
-  msClear();
+async function editStartTime() {
+  showLoading(true);
+  await psClear();
+  showLoading(false);
   document.getElementById('step-end').style.display   = 'none';
   document.getElementById('step-start').style.display = 'block';
   document.getElementById('result-box').style.display = 'none';
   window.scrollTo(0, 0);
 }
 
-function discardManualEntry() {
-  msClear();
+async function discardManualEntry() {
+  showLoading(true);
+  await psClear();
+  showLoading(false);
   _clearManualUI();
 }
 
@@ -697,8 +411,12 @@ async function saveInlineRecipient() {
   document.getElementById('add-inline').style.display = 'none';
   refreshTxSelect();
   document.getElementById('tx-recipient').value = r.id;
-  const saved = msLoad();
-  if (saved) { saved.rid = r.id; msSave(saved); }
+  // Update the shared pending session's recipient if one is active
+  if (pendingSession) {
+    showLoading(true);
+    await psSave(r.id, r.name, pendingSession.sh, pendingSession.sm, pendingSession.sp);
+    showLoading(false);
+  }
 }
 
 function refreshTxSelect() {
@@ -710,9 +428,9 @@ function refreshTxSelect() {
 }
 
 function calculate() {
-  const saved = msLoad();
+  const saved = pendingSession;
   if (!saved) { alert('Please set a start time first!'); return; }
-  const rid = document.getElementById('tx-recipient').value || saved.rid;
+  const rid = document.getElementById('tx-recipient').value || saved.recipient_id;
   if (!rid) { alert('Choose a recipient first!'); return; }
   const { sh, sm, sp } = saved;
   const eh = parseInt(document.getElementById('eh').value) || 0;
@@ -739,8 +457,10 @@ async function saveTxManual(rid, sh, sm, sp, eh, em, ep, cost, mins) {
   if (!rec) return;
   const tx = { id: genId(), recipientId: rid, recipientName: rec.name, sh, sm, sp, eh, em, ep, mins, cost, paid: false, date: new Date().toISOString() };
   transactions.unshift(tx);
+  showLoading(true);
   await dbInsertTransaction(tx);
-  msClear();
+  await psClear();
+  showLoading(false);
   document.getElementById('result-box').innerHTML = `
     <div class="result-card success">
       <div style="font-size:34px;margin-bottom:6px">&#10003;</div>
@@ -748,10 +468,11 @@ async function saveTxManual(rid, sh, sm, sp, eh, em, ep, cost, mins) {
       <button class="btn-ghost" style="color:var(--success);margin-top:14px" onclick="resetNewTx()">+ Add Another</button>
     </div>`;
   renderHome();
+  showToast('💾 Saved', `${rec.name} · ${mins} min · ₱${cost}`, 'success');
 }
 
-function resetNewTx() {
-  msClear();
+async function resetNewTx() {
+  await psClear();
   _clearManualUI();
 }
 
