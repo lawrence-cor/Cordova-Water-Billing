@@ -7,14 +7,14 @@
    1. Create a free Supabase project at https://supabase.com
    2. Run supabase-setup.sql in the SQL Editor
    3. Fill in SUPABASE_URL and SUPABASE_ANON below
-   4. Host index.html + style.css + app.js on GitHub Pages
-      (Settings → Pages → Deploy from branch: main / root)
+   4. Host index.html + style.css + app.js (+ public.html)
+      on GitHub Pages or any static host.
 
    ══════════════════════════════════════════════════════ */
 
 // ── Supabase config ───────────────────────────────────
-const SUPABASE_URL  = 'https://eztutdgqsqkoivshflgv.supabase.co';
-const SUPABASE_ANON = 'sb_publishable_PRo6bOt_InAW4eaoBokiLw_CrXIwaHE';
+const SUPABASE_URL  = 'https://YOUR_PROJECT_ID.supabase.co';
+const SUPABASE_ANON = 'YOUR_ANON_PUBLIC_KEY';
 
 // ── Family password gate ──────────────────────────────
 const FAMILY_NAME = 'Cordova';
@@ -42,9 +42,9 @@ let currentDetail = null;
 const fmt2    = n  => String(n).padStart(2, '0');
 const fmtTime = (h, m, p) => `${fmt2(h)}:${fmt2(m)} ${p}`;
 const fmtDate = iso => new Date(iso).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
-const esc     = s  => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const esc     = s  => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const empty   = (icon, txt) => `<div class="empty"><div class="empty-icon">${icon}</div><div class="empty-text">${txt}</div></div>`;
-const genId   = () => crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2, 18);
+const genId   = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2, 18));
 
 // ─────────────────────────────────────────────────────
 //  TOAST (in-app notifications)
@@ -57,7 +57,8 @@ function showToast(title, body, type = '') {
   container.appendChild(el);
   setTimeout(() => {
     el.style.transition = 'opacity .4s ease, transform .4s ease';
-    el.style.opacity = '0'; el.style.transform = 'translateY(-8px) scale(.97)';
+    el.style.opacity = '0';
+    el.style.transform = 'translateY(-8px) scale(.97)';
     setTimeout(() => el.remove(), 420);
   }, 4500);
 }
@@ -92,7 +93,8 @@ function doLogout() {
 
 // Allow Enter key in login form
 document.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && document.getElementById('screen-login').style.display !== 'none') {
+  const loginScreen = document.getElementById('screen-login');
+  if (e.key === 'Enter' && loginScreen && loginScreen.style.display !== 'none') {
     doLogin();
   }
 });
@@ -112,7 +114,6 @@ async function showApp() {
   renderHome();
   refreshTxSelect();
   showLoading(false);
-  // restoreManualEntry fetches pendingSession itself when the view is opened
 }
 
 function boot() {
@@ -130,13 +131,21 @@ function boot() {
 //  DATA — load from Supabase (shared family tables)
 // ─────────────────────────────────────────────────────
 async function loadData() {
-  const [rRes, tRes] = await Promise.all([
-    db.from('recipients').select('*').order('created_at'),
-    db.from('transactions').select('*').order('date', { ascending: false })
-  ]);
+  try {
+    const [rRes, tRes] = await Promise.all([
+      db.from('recipients').select('*').order('created_at'),
+      db.from('transactions').select('*').order('date', { ascending: false })
+    ]);
 
-  if (!rRes.error && rRes.data) recipients   = rRes.data.map(mapR);
-  if (!tRes.error && tRes.data) transactions = tRes.data.map(mapT);
+    if (rRes.error) throw rRes.error;
+    if (tRes.error) throw tRes.error;
+
+    recipients   = (rRes.data || []).map(mapR);
+    transactions = (tRes.data || []).map(mapT);
+  } catch (err) {
+    console.error('loadData error:', err.message);
+    showToast('⚠️ Load Error', 'Could not load data. Check your Supabase config.', 'warn');
+  }
 }
 
 function mapR(r) { return { id: r.id, name: r.name }; }
@@ -153,11 +162,15 @@ function mapT(t) {
 // ─────────────────────────────────────────────────────
 async function dbInsertRecipient(r) {
   const { error } = await db.from('recipients').insert({ id: r.id, name: r.name });
-  if (error) console.error('insertRecipient:', error.message);
+  if (error) {
+    console.error('insertRecipient:', error.message);
+    showToast('⚠️ Error', 'Could not save recipient.', 'warn');
+  }
 }
 
 async function dbDeleteRecipient(id) {
-  await db.from('recipients').delete().eq('id', id);
+  const { error } = await db.from('recipients').delete().eq('id', id);
+  if (error) console.error('deleteRecipient:', error.message);
 }
 
 async function dbInsertTransaction(t) {
@@ -166,26 +179,33 @@ async function dbInsertTransaction(t) {
     sh: t.sh, sm: t.sm, sp: t.sp, eh: t.eh, em: t.em, ep: t.ep,
     mins: t.mins, cost: t.cost, paid: t.paid, date: t.date
   });
-  if (error) console.error('insertTransaction:', error.message);
+  if (error) {
+    console.error('insertTransaction:', error.message);
+    showToast('⚠️ Error', 'Could not save transaction.', 'warn');
+  }
 }
 
 async function dbTogglePaid(id, paid) {
-  await db.from('transactions').update({ paid }).eq('id', id);
+  const { error } = await db.from('transactions').update({ paid }).eq('id', id);
+  if (error) console.error('togglePaid:', error.message);
 }
 
 async function dbDeleteTransaction(id) {
-  await db.from('transactions').delete().eq('id', id);
+  const { error } = await db.from('transactions').delete().eq('id', id);
+  if (error) console.error('deleteTransaction:', error.message);
 }
 
 // ─────────────────────────────────────────────────────
 //  COST CALCULATION
+//  Formula: ₱6 per 5 minutes + ₱1 per remaining minute
 // ─────────────────────────────────────────────────────
 function calcCostHM(sh, sm, sp, eh, em, ep) {
   let s = (sp === 'PM' && sh !== 12 ? sh + 12 : sp === 'AM' && sh === 12 ? 0 : sh) * 60 + sm;
   let e = (ep === 'PM' && eh !== 12 ? eh + 12 : ep === 'AM' && eh === 12 ? 0 : eh) * 60 + em;
-  if (e <= s) e += 24 * 60;
+  if (e <= s) e += 24 * 60;   // session crosses midnight
   const mins = e - s;
-  return { cost: Math.floor(mins / 5) * 6 + (mins % 5), mins };
+  const cost = Math.floor(mins / 5) * 6 + (mins % 5);
+  return { cost, mins };
 }
 
 // ─────────────────────────────────────────────────────
@@ -196,19 +216,28 @@ const NAV_MAP = {
   'view-newtx':      'nav-newtx',
   'view-recipients': 'nav-recipients',
   'view-history':    'nav-history',
-  'view-detail':     'nav-recipients'
+  'view-detail':     'nav-recipients'   // detail lives under the recipients tab
 };
 
 function showView(id) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-  document.getElementById(id).classList.add('active');
-  const nav = document.getElementById(NAV_MAP[id]);
-  if (nav) nav.classList.add('active');
+
+  const view = document.getElementById(id);
+  if (!view) { console.warn('showView: unknown id', id); return; }
+  view.classList.add('active');
+
+  const navId = NAV_MAP[id];
+  if (navId) {
+    const nav = document.getElementById(navId);
+    if (nav) nav.classList.add('active');
+  }
+
   if (id === 'view-home')       renderHome();
   if (id === 'view-newtx')      restoreManualEntry();
   if (id === 'view-recipients') renderRecipients();
   if (id === 'view-history')    renderHistory();
+
   window.scrollTo(0, 0);
 }
 
@@ -226,7 +255,7 @@ async function saveAsImage(cardId) {
     border-radius:24px; padding:32px 28px;
     font-family:'Sora',sans-serif; color:#f0f6ff;
     border:1.5px solid rgba(56,189,248,0.25);
-    box-shadow: 0 24px 64px rgba(0,0,0,0.6);
+    box-shadow:0 24px 64px rgba(0,0,0,0.6);
   `;
 
   const badge = document.createElement('div');
@@ -238,6 +267,8 @@ async function saveAsImage(cardId) {
   wrap.appendChild(badge);
 
   const clone = card.cloneNode(true);
+  // Remove any "Save as Image" buttons from the clone
+  clone.querySelectorAll('.btn-save-img, .btn-primary').forEach(b => b.remove());
   clone.style.cssText = 'margin:0;border:none;background:transparent;animation:none;';
   wrap.appendChild(clone);
 
@@ -253,7 +284,8 @@ async function saveAsImage(cardId) {
       await new Promise((res, rej) => {
         const s = document.createElement('script');
         s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
-        s.onload = res; s.onerror = rej;
+        s.onload = res;
+        s.onerror = () => rej(new Error('html2canvas failed to load'));
         document.head.appendChild(s);
       });
     }
@@ -283,59 +315,97 @@ async function saveAsImage(cardId) {
 //  MANUAL ENTRY — shared via Supabase pending_session
 //
 //  Table: pending_session
-//  Columns: id (uuid PK), recipient_id (text),
-//           recipient_name (text), sh (int), sm (int),
-//           sp (text), created_at (timestamptz)
+//  Columns: id (text PK — always 'singleton'),
+//           recipient_id (text), recipient_name (text),
+//           sh (int), sm (int), sp (text),
+//           created_at (timestamptz default now())
 //
-//  Only one row ever exists (singleton pattern).
-//  All devices read/write this same row so every
-//  family member sees the same locked start time.
+//  Using a fixed primary key 'singleton' means there is
+//  always exactly one row and upsert is safe/atomic.
 // ─────────────────────────────────────────────────────
 
-// In-memory mirror of the pending_session row
-// { id, recipient_id, recipient_name, sh, sm, sp } | null
-let pendingSession = null;
+let pendingSession = null;   // { id, recipient_id, recipient_name, sh, sm, sp } | null
+
+const PS_ID = 'singleton';   // fixed PK — only one row ever exists
 
 async function psLoad() {
-  const { data, error } = await db
-    .from('pending_session')
-    .select('*')
-    .limit(1)
-    .maybeSingle();
-  if (error) { console.error('psLoad:', error.message); pendingSession = null; return; }
-  pendingSession = data || null;
+  try {
+    const { data, error } = await db
+      .from('pending_session')
+      .select('*')
+      .eq('id', PS_ID)
+      .maybeSingle();
+    if (error) throw error;
+    pendingSession = data || null;
+  } catch (err) {
+    console.error('psLoad:', err.message);
+    pendingSession = null;
+  }
 }
 
 async function psSave(rid, recipientName, sh, sm, sp) {
-  // Delete any existing row first (singleton)
-  await db.from('pending_session').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-  const { data, error } = await db.from('pending_session').insert({
-    id: genId(), recipient_id: rid, recipient_name: recipientName,
-    sh, sm, sp
-  }).select().single();
-  if (error) { console.error('psSave:', error.message); return; }
-  pendingSession = data;
+  try {
+    const { data, error } = await db
+      .from('pending_session')
+      .upsert({ id: PS_ID, recipient_id: rid, recipient_name: recipientName, sh, sm, sp })
+      .select()
+      .single();
+    if (error) throw error;
+    pendingSession = data;
+  } catch (err) {
+    console.error('psSave:', err.message);
+    showToast('⚠️ Sync Error', 'Could not save start time. Check connection.', 'warn');
+  }
 }
 
 async function psClear() {
-  await db.from('pending_session').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-  pendingSession = null;
+  try {
+    const { error } = await db
+      .from('pending_session')
+      .delete()
+      .eq('id', PS_ID);
+    if (error) throw error;
+    pendingSession = null;
+  } catch (err) {
+    console.error('psClear:', err.message);
+  }
 }
 
-function clampH(el) { let v = parseInt(el.value) || 0; if (v > 12) el.value = 12; if (v < 0) el.value = ''; }
-function clampM(el) { let v = parseInt(el.value) || 0; if (v > 59) el.value = 59; if (v < 0) el.value = ''; }
-function togglePeriod(id) { const el = document.getElementById(id); el.textContent = el.textContent === 'AM' ? 'PM' : 'AM'; }
+// ─────────────────────────────────────────────────────
+//  FORM HELPERS
+// ─────────────────────────────────────────────────────
+function clampH(el) {
+  let v = parseInt(el.value) || 0;
+  if (v > 12) el.value = 12;
+  if (v < 1 && el.value !== '') el.value = '';
+}
 
+function clampM(el) {
+  let v = parseInt(el.value) || 0;
+  if (v > 59) el.value = 59;
+  if (v < 0)  el.value = '';
+}
+
+function togglePeriod(id) {
+  const el = document.getElementById(id);
+  el.textContent = el.textContent === 'AM' ? 'PM' : 'AM';
+}
+
+// ─────────────────────────────────────────────────────
+//  MANUAL ENTRY — state machine
+// ─────────────────────────────────────────────────────
 async function restoreManualEntry() {
-  // Always fetch latest from Supabase so all devices stay in sync
+  // Always fetch fresh from Supabase so all devices stay in sync
   showLoading(true);
   await psLoad();
   showLoading(false);
-  const saved = pendingSession;
-  if (saved) {
-    refreshTxSelect();
-    document.getElementById('tx-recipient').value  = saved.recipient_id || '';
-    document.getElementById('start-locked-time').textContent = fmtTime(saved.sh, saved.sm, saved.sp);
+
+  refreshTxSelect();
+
+  if (pendingSession) {
+    document.getElementById('tx-recipient').value = pendingSession.recipient_id || '';
+    document.getElementById('start-locked-time').textContent =
+      fmtTime(pendingSession.sh, pendingSession.sm, pendingSession.sp);
     document.getElementById('step-start').style.display = 'none';
     document.getElementById('step-end').style.display   = 'block';
     document.getElementById('result-box').style.display = 'none';
@@ -347,23 +417,30 @@ async function restoreManualEntry() {
 async function setStartTime() {
   const rid = document.getElementById('tx-recipient').value;
   if (!rid) { alert('Choose a recipient first!'); return; }
-  const sh = parseInt(document.getElementById('sh').value) || 0;
+
+  const sh = parseInt(document.getElementById('sh').value);
   const sm = parseInt(document.getElementById('sm').value) || 0;
   const sp = document.getElementById('sp').textContent;
-  if (!sh) { alert('Enter a valid start hour!'); return; }
+
+  if (!sh || sh < 1 || sh > 12) { alert('Enter a valid start hour (1–12)!'); return; }
 
   const rec = recipients.find(r => r.id === rid);
   showLoading(true);
   await psSave(rid, rec ? rec.name : rid, sh, sm, sp);
   showLoading(false);
 
+  if (!pendingSession) return;   // psSave failed, already toasted
+
   document.getElementById('start-locked-time').textContent = fmtTime(sh, sm, sp);
   document.getElementById('step-start').style.display = 'none';
   document.getElementById('step-end').style.display   = 'block';
   document.getElementById('result-box').style.display = 'none';
-  ['eh', 'em'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('eh').value = '';
+  document.getElementById('em').value = '';
   document.getElementById('ep').textContent = 'PM';
   window.scrollTo(0, 0);
+
+  showToast('✅ Start Time Set', `Session started at ${fmtTime(sh, sm, sp)} for ${rec ? rec.name : '—'}`, 'success');
 }
 
 async function editStartTime() {
@@ -377,6 +454,7 @@ async function editStartTime() {
 }
 
 async function discardManualEntry() {
+  if (!confirm('Discard the current session and start over?')) return;
   showLoading(true);
   await psClear();
   showLoading(false);
@@ -384,13 +462,18 @@ async function discardManualEntry() {
 }
 
 function _clearManualUI() {
-  ['sh', 'sm', 'eh', 'em'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('sp').textContent = 'AM';
-  document.getElementById('ep').textContent = 'PM';
-  document.getElementById('result-box').style.display = 'none';
-  document.getElementById('add-inline').style.display = 'none';
-  document.getElementById('step-start').style.display = 'block';
-  document.getElementById('step-end').style.display   = 'none';
+  ['sh', 'sm', 'eh', 'em'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  const sp = document.getElementById('sp'); if (sp) sp.textContent = 'AM';
+  const ep = document.getElementById('ep'); if (ep) ep.textContent = 'PM';
+
+  const rb = document.getElementById('result-box');     if (rb) rb.style.display = 'none';
+  const ai = document.getElementById('add-inline');     if (ai) ai.style.display = 'none';
+  const ss = document.getElementById('step-start');     if (ss) ss.style.display = 'block';
+  const se = document.getElementById('step-end');       if (se) se.style.display = 'none';
+
   refreshTxSelect();
 }
 
@@ -403,7 +486,9 @@ function toggleAddInline() {
 async function saveInlineRecipient() {
   const name = document.getElementById('inline-name').value.trim();
   if (!name) return;
-  if (recipients.find(r => r.name.toLowerCase() === name.toLowerCase())) { alert('Already exists!'); return; }
+  if (recipients.find(r => r.name.toLowerCase() === name.toLowerCase())) {
+    alert('That recipient already exists!'); return;
+  }
   const r = { id: genId(), name };
   recipients.push(r);
   await dbInsertRecipient(r);
@@ -411,6 +496,7 @@ async function saveInlineRecipient() {
   document.getElementById('add-inline').style.display = 'none';
   refreshTxSelect();
   document.getElementById('tx-recipient').value = r.id;
+
   // Update the shared pending session's recipient if one is active
   if (pendingSession) {
     showLoading(true);
@@ -421,22 +507,31 @@ async function saveInlineRecipient() {
 
 function refreshTxSelect() {
   const sel = document.getElementById('tx-recipient');
+  if (!sel) return;
   const cur = sel.value;
   sel.innerHTML = '<option value="">— Select recipient —</option>' +
     recipients.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('');
   if (cur) sel.value = cur;
 }
 
+// ─────────────────────────────────────────────────────
+//  CALCULATE & SAVE
+// ─────────────────────────────────────────────────────
 function calculate() {
   const saved = pendingSession;
   if (!saved) { alert('Please set a start time first!'); return; }
+
+  // Recipient: prefer the dropdown (user may have changed it), fall back to session
   const rid = document.getElementById('tx-recipient').value || saved.recipient_id;
   if (!rid) { alert('Choose a recipient first!'); return; }
+
   const { sh, sm, sp } = saved;
-  const eh = parseInt(document.getElementById('eh').value) || 0;
+  const eh = parseInt(document.getElementById('eh').value);
   const em = parseInt(document.getElementById('em').value) || 0;
   const ep = document.getElementById('ep').textContent;
-  if (!eh) { alert('Enter a valid end hour!'); return; }
+
+  if (!eh || eh < 1 || eh > 12) { alert('Enter a valid end hour (1–12)!'); return; }
+
   const res = calcCostHM(sh, sm, sp, eh, em, ep);
   const rec = recipients.find(r => r.id === rid);
   const box = document.getElementById('result-box');
@@ -447,27 +542,41 @@ function calculate() {
       <div style="font-weight:800;font-size:15px;margin-bottom:8px;color:var(--text)">${esc(rec ? rec.name : '—')}</div>
       <div class="result-amount">&#8369;${res.cost}</div>
       <div class="result-sub">${res.mins} min &nbsp;&#183;&nbsp; ${fmtTime(sh, sm, sp)} &#8594; ${fmtTime(eh, em, ep)}</div>
-      <button class="btn-primary" style="margin-top:12px" onclick="saveTxManual('${rid}',${sh},${sm},'${sp}',${eh},${em},'${ep}',${res.cost},${res.mins})">Save Transaction</button>
+      <button class="btn-primary" style="margin-top:12px"
+        onclick="saveTxManual('${rid}',${sh},${sm},'${sp}',${eh},${em},'${ep}',${res.cost},${res.mins})">
+        Save Transaction
+      </button>
       <button class="btn-save-img" onclick="saveAsImage('manual-receipt-card')">📸 Save as Image</button>
     </div>`;
+
+  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 async function saveTxManual(rid, sh, sm, sp, eh, em, ep, cost, mins) {
   const rec = recipients.find(r => r.id === rid);
-  if (!rec) return;
-  const tx = { id: genId(), recipientId: rid, recipientName: rec.name, sh, sm, sp, eh, em, ep, mins, cost, paid: false, date: new Date().toISOString() };
-  transactions.unshift(tx);
+  if (!rec) { alert('Recipient not found — please try again.'); return; }
+
+  const tx = {
+    id: genId(), recipientId: rid, recipientName: rec.name,
+    sh, sm, sp, eh, em, ep, mins, cost,
+    paid: false, date: new Date().toISOString()
+  };
+
   showLoading(true);
   await dbInsertTransaction(tx);
   await psClear();
   showLoading(false);
+
+  transactions.unshift(tx);
+  renderHome();
+
   document.getElementById('result-box').innerHTML = `
     <div class="result-card success">
       <div style="font-size:34px;margin-bottom:6px">&#10003;</div>
       <div style="color:var(--success);font-weight:800;font-size:17px">Transaction Saved!</div>
       <button class="btn-ghost" style="color:var(--success);margin-top:14px" onclick="resetNewTx()">+ Add Another</button>
     </div>`;
-  renderHome();
+
   showToast('💾 Saved', `${rec.name} · ${mins} min · ₱${cost}`, 'success');
 }
 
@@ -482,25 +591,32 @@ async function resetNewTx() {
 async function addRecipient() {
   const name = document.getElementById('new-rec-name').value.trim();
   if (!name) return;
-  if (recipients.find(r => r.name.toLowerCase() === name.toLowerCase())) { alert('Already exists!'); return; }
+  if (recipients.find(r => r.name.toLowerCase() === name.toLowerCase())) {
+    alert('That recipient already exists!'); return;
+  }
   const r = { id: genId(), name };
   recipients.push(r);
   await dbInsertRecipient(r);
   document.getElementById('new-rec-name').value = '';
   renderRecipients();
+  refreshTxSelect();
 }
 
 async function deleteRecipient(id) {
   if (!confirm('Delete this recipient and all their transactions?')) return;
-  recipients = recipients.filter(r => r.id !== id);
-  transactions = transactions.filter(t => t.recipientId !== id);
+  showLoading(true);
   await dbDeleteRecipient(id);
+  showLoading(false);
+  recipients   = recipients.filter(r => r.id !== id);
+  transactions = transactions.filter(t => t.recipientId !== id);
   renderRecipients();
+  renderHome();
 }
 
 function openDetail(id) {
   currentDetail = id;
-  document.getElementById('detail-title').textContent = recipients.find(r => r.id === id).name;
+  const rec = recipients.find(r => r.id === id);
+  document.getElementById('detail-title').textContent = rec ? rec.name : '—';
   renderDetail();
   showView('view-detail');
 }
@@ -518,8 +634,9 @@ function renderRecipients() {
           <div class="li-date">${txs.length} transaction${txs.length !== 1 ? 's' : ''}</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px">
-          ${u ? `<span style="color:var(--danger);font-family:var(--mono);font-weight:500;font-size:16px">&#8369;${u}</span>`
-              : (txs.length ? `<span style="color:var(--success);font-size:12px;font-weight:700">All paid &#10003;</span>` : '')}
+          ${u
+            ? `<span style="color:var(--danger);font-family:var(--mono);font-weight:500;font-size:16px">&#8369;${u}</span>`
+            : (txs.length ? `<span style="color:var(--success);font-size:12px;font-weight:700">All paid &#10003;</span>` : '')}
           <button class="btn-delete" onclick="event.stopPropagation();deleteRecipient('${r.id}')">&#10005;</button>
         </div>
       </div>
@@ -578,19 +695,23 @@ function txCard(t, hideRec = false) {
 }
 
 async function togglePaid(id) {
-  const tx = transactions.find(t => t.id === id); if (!tx) return;
+  const tx = transactions.find(t => t.id === id);
+  if (!tx) return;
   tx.paid = !tx.paid;
   await dbTogglePaid(id, tx.paid);
   const av = document.querySelector('.view.active').id;
   if (av === 'view-history') renderHistory();
   if (av === 'view-detail')  renderDetail();
   renderHome();
+  showToast(tx.paid ? '✅ Marked Paid' : '↩ Marked Unpaid', `${tx.recipientName} · ₱${tx.cost}`, tx.paid ? 'success' : '');
 }
 
 async function deleteTx(id) {
   if (!confirm('Delete this transaction?')) return;
-  transactions = transactions.filter(t => t.id !== id);
+  showLoading(true);
   await dbDeleteTransaction(id);
+  showLoading(false);
+  transactions = transactions.filter(t => t.id !== id);
   const av = document.querySelector('.view.active').id;
   if (av === 'view-history') renderHistory();
   if (av === 'view-detail')  renderDetail();
@@ -603,6 +724,20 @@ async function deleteTx(id) {
 function renderHome() {
   document.getElementById('home-rec-count').textContent = `${recipients.length} saved`;
   document.getElementById('home-tx-count').textContent  = `${transactions.length} records`;
+
+  // Check if there's an active pending session to show a hint
+  const sessionSub = document.getElementById('home-session-sub');
+  if (sessionSub) {
+    if (pendingSession) {
+      const rec = recipients.find(r => r.id === pendingSession.recipient_id);
+      sessionSub.textContent = `⏳ ${rec ? rec.name : '?'} @ ${fmtTime(pendingSession.sh, pendingSession.sm, pendingSession.sp)}`;
+      sessionSub.style.color = 'var(--warn)';
+    } else {
+      sessionSub.textContent = 'Set start time';
+      sessionSub.style.color = '';
+    }
+  }
+
   const rows = recipients.map(r => {
     const amt = transactions.filter(t => t.recipientId === r.id && !t.paid).reduce((s, t) => s + t.cost, 0);
     if (!amt) return '';
@@ -611,6 +746,7 @@ function renderHome() {
       <span style="color:var(--danger);font-family:var(--mono);font-weight:500;font-size:16px">&#8369;${amt}</span>
     </div>`;
   }).join('');
+
   document.getElementById('unpaid-summary').innerHTML = rows ||
     `<div style="color:var(--muted);font-size:14px;text-align:center;padding:12px">All clear! No unpaid transactions &#10003;</div>`;
 }

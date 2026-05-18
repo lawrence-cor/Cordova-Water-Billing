@@ -4,11 +4,7 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
   <title>Billing Tracker · Cordova</title>
-
-  <!-- Styles -->
   <link rel="stylesheet" href="style.css"/>
-
-  <!-- Supabase SDK (needed before app.js) -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
@@ -61,34 +57,23 @@
       <button class="user-bar-logout" onclick="doLogout()">Sign Out</button>
     </div>
 
-    <!-- Notification permission prompt (hidden once granted) -->
-    <div class="notif-bar" id="notif-bar" style="display:none">
-      <div class="notif-bar-text">Enable notifications to get alerts when sessions start &amp; stop.</div>
-      <button class="notif-bar-btn" onclick="requestNotifPermission()">Enable</button>
-    </div>
-
     <div class="hero">
       <div class="hero-tag">Billing Tracker</div>
       <div class="hero-title">Track Every<br><span>Peso.</span></div>
     </div>
 
     <div class="card-grid">
-      <div class="home-card" onclick="showView('view-timer')">
-        <div class="home-card-icon">▶︎</div>
-        <div class="home-card-label">Auto Timer</div>
-        <div class="home-card-sub" id="home-timer-sub">Tap to start</div>
-      </div>
       <div class="home-card" onclick="showView('view-newtx')">
         <div class="home-card-icon">⏱</div>
-        <div class="home-card-label">Manual Entry</div>
-        <div class="home-card-sub">Enter times manually</div>
+        <div class="home-card-label">New Session</div>
+        <div class="home-card-sub" id="home-session-sub">Set start time</div>
       </div>
       <div class="home-card" onclick="showView('view-recipients')">
         <div class="home-card-icon">👤</div>
         <div class="home-card-label">Recipients</div>
         <div class="home-card-sub" id="home-rec-count">0 saved</div>
       </div>
-      <div class="home-card" onclick="showView('view-history')">
+      <div class="home-card full" onclick="showView('view-history')">
         <div class="home-card-icon">📋</div>
         <div class="home-card-label">All Transactions</div>
         <div class="home-card-sub" id="home-tx-count">0 records</div>
@@ -98,54 +83,6 @@
     <div class="section-card">
       <div class="section-label">Unpaid Summary</div>
       <div id="unpaid-summary"></div>
-    </div>
-  </div>
-
-  <!-- ── AUTO TIMER ────────────────────────────────── -->
-  <div id="view-timer" class="view">
-    <div class="back-bar">
-      <button class="back-btn" onclick="showView('view-home')">‹</button>
-      <span class="back-title">Auto Timer</span>
-    </div>
-
-    <!-- Idle -->
-    <div id="tp-idle">
-      <div class="section-card">
-        <div class="section-label">Who is this session for?</div>
-        <select id="timer-recipient" style="margin-bottom:10px">
-          <option value="">— Select recipient —</option>
-        </select>
-        <button class="btn-ghost" onclick="toggleTimerAdd()">+ Add New Recipient</button>
-        <div id="timer-add-row" style="display:none;margin-top:12px">
-          <div class="row">
-            <input type="text" id="timer-new-name" placeholder="Recipient name" style="flex:1"
-                   onkeydown="if(event.key==='Enter')saveTimerNewRec()"/>
-            <button class="btn-small" onclick="saveTimerNewRec()">Save</button>
-          </div>
-        </div>
-      </div>
-      <button class="btn-start" onclick="timerStart()">▶&nbsp; START SESSION</button>
-    </div>
-
-    <!-- Running -->
-    <div id="tp-running" style="display:none">
-      <div class="timer-running-card">
-        <div class="tr-rec-name" id="tr-name">—</div>
-        <div class="tr-started" id="tr-started">Started at —</div>
-        <div class="tr-clock" id="tr-clock">00:00:00</div>
-        <div class="tr-live-badge"><span class="dot"></span>LIVE</div>
-      </div>
-      <button class="btn-stop" onclick="timerStop()">⏹&nbsp; STOP &amp; SAVE</button>
-      <p class="safe-note">Any family member can stop this session<br>from their own device.</p>
-    </div>
-
-    <!-- Preview / save -->
-    <div id="tp-preview" style="display:none">
-      <div class="timer-preview-card" id="tp-preview-inner"></div>
-      <button class="btn-primary" onclick="timerSave()">Save Transaction</button>
-      <button class="btn-save-img" onclick="saveAsImage('tp-preview-inner')">📸 Save as Image</button>
-      <button class="btn-ghost" style="width:100%;text-align:center;display:block;margin-bottom:8px"
-              onclick="timerDiscard()">Discard Session</button>
     </div>
   </div>
 
@@ -205,7 +142,7 @@
           <button class="period-btn" id="ep" onclick="togglePeriod('ep')">PM</button>
         </div>
       </div>
-      <button class="btn-primary" onclick="calculate()">Calculate &amp; Save</button>
+      <button class="btn-primary" onclick="calculate()">Calculate &amp; Preview</button>
       <button class="btn-ghost btn-discard" onclick="discardManualEntry()">✕ Discard &amp; Start Over</button>
       <div id="result-box" style="display:none"></div>
     </div>
@@ -252,14 +189,9 @@
       <span class="nav-item-icon">🏠</span>
       <span class="nav-item-label">Home</span>
     </button>
-    <button class="nav-item" id="nav-timer" onclick="showView('view-timer')">
-      <span class="live-dot" id="nav-live-dot"></span>
-      <span class="nav-item-icon">▶︎</span>
-      <span class="nav-item-label">Timer</span>
-    </button>
     <button class="nav-item" id="nav-newtx" onclick="showView('view-newtx')">
-      <span class="nav-item-icon">✏️</span>
-      <span class="nav-item-label">Manual</span>
+      <span class="nav-item-icon">⏱</span>
+      <span class="nav-item-label">Session</span>
     </button>
     <button class="nav-item" id="nav-recipients" onclick="showView('view-recipients')">
       <span class="nav-item-icon">👥</span>
@@ -273,8 +205,6 @@
 
 </div><!-- /#app-shell -->
 
-<!-- App logic -->
 <script src="app.js"></script>
-
 </body>
 </html>
